@@ -1,0 +1,31 @@
+[package]
+name = "Kudosu"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Handles native Android events/lifecycle
+android-activity = { version = "0.6.1", features = ["native-activity"] }
+log = "0.4.34"
+android_logger = "0.15.1"
+tiny-skia = { version = "0.12.0", default-features = false, features = [
+	"std",
+	"simd",
+] }
+ttf-parser = "0.25.1"
+
+[package.metadata.android]
+package = "com.example.myrustandroidapp"
+label = "My Rust App"
+assets = "assets"
+
+[package.metadata.android.sdk]
+target_sdk_version = 34
+min_sdk_version = 21
+
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.touchscreen"
+required = false

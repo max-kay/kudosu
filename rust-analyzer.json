@@ -1,0 +1,8 @@
+{
+  "cargo": {
+    "target": "aarch64-linux-android"
+  },
+  "check": {
+    "targets": "aarch64-linux-android"
+  }
+}
