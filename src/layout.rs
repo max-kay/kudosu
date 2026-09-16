@@ -1,16 +1,32 @@
-use crate::{GridPosition, Inset, insets};
-use android_activity::Rect as AndroidRect;
-use android_activity::ndk::native_window::NativeWindow;
+use crate::{GridPosition, Inset, Number};
 use log::{info, warn};
 use tiny_skia::{Color, LineJoin, Paint, PathBuilder, PixmapMut, Rect, Stroke};
+
+pub trait IntoPaint {
+    fn into_paint(&self) -> Paint<'static>;
+}
+
+impl IntoPaint for Color {
+    fn into_paint(&self) -> Paint<'static> {
+        let mut p = Paint::default();
+        p.shader = tiny_skia::Shader::SolidColor(*self);
+        p
+    }
+}
 
 pub struct Palette {
     pub background: Color,
     pub grid_background: Color,
-    pub grid_line_color: Color,
-    pub text_color: Color,
-    pub highlight_color: Color,
-    pub selection_color: Color,
+    pub grid_line: Color,
+    pub text: Color,
+    pub highlight: Color,
+    pub selection: Color,
+    pub button_background: Color,
+    pub button_background_active: Color,
+    pub button_foreground: Color,
+    pub button_foreground_active: Color,
+
+    pub wrong_number: Color,
 }
 
 impl Default for Palette {
@@ -18,48 +34,22 @@ impl Default for Palette {
         Self {
             background: unsafe { Color::from_rgba_unchecked(0.3, 0.3, 0.3, 1.0) },
             grid_background: Color::WHITE,
-            grid_line_color: Color::BLACK,
-            text_color: Color::BLACK,
-            highlight_color: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.1, 1.0) },
-            selection_color: unsafe { Color::from_rgba_unchecked(0.8, 0.1, 0.9, 1.0) },
+            grid_line: Color::BLACK,
+            text: Color::BLACK,
+            highlight: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.1, 1.0) },
+            selection: unsafe { Color::from_rgba_unchecked(0.8, 0.1, 0.9, 1.0) },
+            button_background: Color::WHITE,
+            button_background_active: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.8, 1.0) },
+            button_foreground: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.8, 1.0) },
+            button_foreground_active: Color::WHITE,
+            wrong_number: unsafe { Color::from_rgba_unchecked(0.9, 0.0, 0.0, 1.0) },
         }
-    }
-}
-
-impl Palette {
-    pub fn grid_background_paint(&self) -> Paint<'static> {
-        let mut p = Paint::default();
-        p.shader = tiny_skia::Shader::SolidColor(self.grid_background);
-        p
-    }
-
-    pub fn grid_line_paint(&self) -> Paint<'static> {
-        let mut p = Paint::default();
-        p.shader = tiny_skia::Shader::SolidColor(self.grid_line_color);
-        p
-    }
-
-    pub fn text_paint(&self) -> Paint<'static> {
-        let mut p = Paint::default();
-        p.shader = tiny_skia::Shader::SolidColor(self.text_color);
-        p
-    }
-
-    pub fn highlight_paint(&self) -> Paint<'static> {
-        let mut p = Paint::default();
-        p.shader = tiny_skia::Shader::SolidColor(self.highlight_color);
-        p
-    }
-    pub fn selection_paint(&self) -> Paint<'static> {
-        let mut p = Paint::default();
-        p.shader = tiny_skia::Shader::SolidColor(self.selection_color);
-        p
     }
 }
 
 const MARGIN_FACTOR: f32 = 0.05;
 
-#[derive(Default)]
+#[derive(Clone, Copy)]
 pub struct GridLayout {
     left: f32,
     top: f32,
@@ -110,14 +100,80 @@ impl GridLayout {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy)]
 struct ButtonLayout {
-    num_square_top: f32,
-    num_square_left: f32,
-    num_square_size: f32,
+    all: Rect,
+    margin: f32,
 }
 
-#[derive(Default)]
+impl ButtonLayout {
+    const N_COLS: usize = 5;
+    const N_ROWS: usize = 4;
+    const BUTTONS: [Button; 4 * 5] = [
+        Button::Undo,              // (0, 0)
+        Button::Number(Number(1)), // (1, 0)
+        Button::Number(Number(2)), // (2, 0)
+        Button::Number(Number(3)), // (3, 0)
+        Button::Solve,             // (4, 0)
+        Button::Redo,              // (0, 1)
+        Button::Number(Number(4)), // (1, 1)
+        Button::Number(Number(5)), // (2, 1)
+        Button::Number(Number(6)), // (3, 1)
+        Button::Corner,            // (4, 1)
+        Button::SelectionMode,     // (0, 2)
+        Button::Number(Number(7)), // (1, 2)
+        Button::Number(Number(8)), // (2, 2)
+        Button::Number(Number(9)), // (3, 2)
+        Button::Center,            // (4, 2)
+        Button::Delete,            // (0, 3)
+        Button::Generic1,          // (1, 3)
+        Button::Generic2,          // (2, 3)
+        Button::Generic3,          // (3, 3)
+        Button::Color,             // (4, 3)
+    ];
+    pub fn hit(&self, x: f32, y: f32) -> Option<Button> {
+        let norm_x = ((x - self.all.left()) / self.all.width() * Self::N_COLS as f32).floor();
+        let norm_y = ((y - self.all.top()) / self.all.height() * Self::N_ROWS as f32).floor();
+        if !(0.0 <= norm_x && norm_x <= Self::N_COLS as f32) {
+            return None;
+        }
+        if !(0.0 <= norm_y && norm_y <= Self::N_ROWS as f32) {
+            return None;
+        }
+        Some(Self::BUTTONS[norm_x as usize + norm_y as usize * Self::N_COLS])
+    }
+
+    pub fn get_button_rects(&self) -> Vec<(Rect, Button)> {
+        let mut out = Vec::new();
+        for i in 0..Self::N_ROWS {
+            for j in 0..Self::N_COLS {
+                out.push((
+                    Rect::from_xywh(
+                        self.all.left()
+                            + j as f32 * self.all.width() / Self::N_COLS as f32
+                            + self.margin / 2.0,
+                        self.all.top()
+                            + i as f32 * self.all.height() / Self::N_ROWS as f32
+                            + self.margin / 2.0,
+                        self.all.width() / Self::N_COLS as f32 - self.margin,
+                        self.all.height() / Self::N_ROWS as f32 - self.margin,
+                    )
+                    .expect("always valid"),
+                    Self::BUTTONS[i * Self::N_COLS + j],
+                ))
+            }
+        }
+        out
+    }
+}
+
+struct MenuLayout {
+    pause: Rect,
+    settings: Rect,
+    hint: Rect,
+}
+
+#[derive(Clone, Copy)]
 pub struct Layout {
     grid: GridLayout,
     button: ButtonLayout,
@@ -125,6 +181,10 @@ pub struct Layout {
 
 impl Layout {
     pub fn new_portrait(window: Rect, insets: &[Inset]) -> Self {
+        info!(
+            "new_portrait with window: {:?}, insets: {:?}",
+            window, insets
+        );
         let mut drawable_area = window;
         for inset in insets {
             match inset.kind {
@@ -166,23 +226,34 @@ impl Layout {
                 crate::InsetKind::SystemBars => todo!(),
             }
         }
-        let margin = window.width() * MARGIN_FACTOR;
-        let size = window.width() - 2.0 * margin;
+        let margin = drawable_area.width() * MARGIN_FACTOR;
+        let size = drawable_area.width() - 2.0 * margin;
+        let ui_button_size = size / (ButtonLayout::N_COLS as f32 + 1.0);
+        let button_area = Rect::from_ltrb(
+            margin + ui_button_size,
+            drawable_area.bottom() - ButtonLayout::N_ROWS as f32 * ui_button_size - margin,
+            drawable_area.right() - margin,
+            drawable_area.bottom() - margin,
+        )
+        .expect("valid button area");
+        let button_margin = ui_button_size / 20.0;
         let grid = GridLayout {
-            left: window.left() + margin,
-            top: window.top() + margin,
+            left: drawable_area.left() + margin,
+            top: button_area.top() - margin - size,
             size: size,
-            bold_stroke: 3.0,
+            bold_stroke: size / 9.0 / 20.0,
         };
         Self {
             grid,
             button: ButtonLayout {
-                ..Default::default()
+                all: button_area,
+                margin: button_margin,
             },
         }
     }
 
     pub fn new_landscape(window: Rect, insets: &[Inset]) -> Self {
+        todo!();
         let margin = window.height() * MARGIN_FACTOR;
         let size = window.height() - 2.0 * margin;
         let grid = GridLayout {
@@ -193,9 +264,7 @@ impl Layout {
         };
         Self {
             grid,
-            button: ButtonLayout {
-                ..Default::default()
-            },
+            button: todo!(),
         }
     }
 
@@ -222,7 +291,7 @@ impl Layout {
 
         pm.stroke_path(
             &pb.finish().unwrap(),
-            &palette.grid_line_paint(),
+            &palette.grid_line.into_paint(),
             &self.grid.bold_stroke(),
             tiny_skia::Transform::identity(),
             None,
@@ -253,7 +322,7 @@ impl Layout {
 
         pm.stroke_path(
             &pb.finish().unwrap(),
-            &palette.grid_line_paint(),
+            &palette.grid_line.into_paint(),
             &self.grid.bold_stroke(),
             tiny_skia::Transform::identity(),
             None,
@@ -289,7 +358,7 @@ impl Layout {
         }
         pm.stroke_path(
             &pb.finish().unwrap(),
-            &palette.grid_line_paint(),
+            &palette.grid_line.into_paint(),
             &self.grid.light_stroke(),
             tiny_skia::Transform::identity(),
             None,
@@ -297,11 +366,20 @@ impl Layout {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum Button {
-    Number(u8),
-    Solid,
+    Number(Number),
+    Undo,
+    Redo,
+    SelectionMode,
+    Delete,
+    Solve,
     Center,
     Corner,
+    Color,
+    Generic1,
+    Generic2,
+    Generic3,
 }
 
 pub enum Hit {
@@ -315,10 +393,13 @@ impl Layout {
         if let Some(pos) = self.grid.hit(x, y) {
             return Hit::Cell(pos);
         }
+        if let Some(but) = self.button.hit(x, y) {
+            return Hit::Button(but);
+        }
         return Hit::None;
     }
 
-    pub fn get_rect(&self, pos: GridPosition) -> Rect {
+    pub fn get_cell_rect(&self, pos: GridPosition) -> Rect {
         self.grid.get_rect(pos)
     }
 
@@ -330,5 +411,9 @@ impl Layout {
             self.grid.size,
         )
         .unwrap()
+    }
+
+    pub fn get_button_rects(&self) -> Vec<(Rect, Button)> {
+        self.button.get_button_rects()
     }
 }

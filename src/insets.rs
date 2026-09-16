@@ -607,12 +607,6 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
             }
         }
 
-        debug!(
-            "Retrieved {} insets (cutout: {}, sys_bars: {})",
-            list.len(),
-            got_cutout,
-            got_system_bars
-        );
         Ok(list)
     });
 

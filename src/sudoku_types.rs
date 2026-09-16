@@ -64,6 +64,10 @@ impl PositionBucket {
         Self((1 << 81) - 1)
     }
 
+    pub fn clear(&mut self) {
+        self.0 = 0;
+    }
+
     pub fn row(num: u8) -> Self {
         let mut acc = 0;
         let mut pointer = 1 << (num * 9);
@@ -156,7 +160,7 @@ impl Not for PositionBucket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Number(u8);
+pub struct Number(pub(super) u8);
 
 impl Number {
     pub fn new(val: u8) -> Self {
@@ -205,6 +209,10 @@ impl NumberBucket {
 
     pub fn all() -> Self {
         Self((1 << 9) - 1)
+    }
+
+    pub fn clear(&mut self) {
+        self.0 = 0;
     }
 
     pub fn count(&self) -> u32 {
@@ -349,7 +357,7 @@ pub struct SCellMut<'a> {
 
     pub solved_number: &'a mut Option<Number>,
     pub center_notes: &'a mut NumberBucket,
-    pub edge_notes: &'a mut NumberBucket,
+    pub corner_notes: &'a mut NumberBucket,
 }
 
 pub struct SCellRef<'a> {
@@ -358,7 +366,7 @@ pub struct SCellRef<'a> {
 
     pub solved_number: Option<&'a Number>,
     pub center_notes: &'a NumberBucket,
-    pub edge_notes: &'a NumberBucket,
+    pub corner_notes: &'a NumberBucket,
 }
 
 pub struct Sudoku {
@@ -367,7 +375,7 @@ pub struct Sudoku {
 
     solved_numbers: NineGrid<Option<Number>>,
     center_notes: NineGrid<NumberBucket>,
-    edge_notes: NineGrid<NumberBucket>,
+    corner_notes: NineGrid<NumberBucket>,
 }
 
 impl Sudoku {
@@ -377,7 +385,7 @@ impl Sudoku {
             solution,
             solved_numbers: NineGrid::filled(None),
             center_notes: NineGrid::filled(NumberBucket::new()),
-            edge_notes: NineGrid::filled(NumberBucket::new()),
+            corner_notes: NineGrid::filled(NumberBucket::new()),
         }
     }
 
@@ -387,7 +395,7 @@ impl Sudoku {
             solution: &self.solution[pos],
             solved_number: self.solved_numbers[pos].as_ref(),
             center_notes: &self.center_notes[pos],
-            edge_notes: &self.edge_notes[pos],
+            corner_notes: &self.corner_notes[pos],
         }
     }
 
@@ -397,8 +405,40 @@ impl Sudoku {
             solution: &mut self.solution[pos],
             solved_number: &mut self.solved_numbers[pos],
             center_notes: &mut self.center_notes[pos],
-            edge_notes: &mut self.edge_notes[pos],
+            corner_notes: &mut self.corner_notes[pos],
         }
+    }
+
+    pub fn selection_or_all_center_notes(&self, selection: PositionBucket) -> NumberBucket {
+        let mut out = NumberBucket::new();
+        for pos in selection.into_iter() {
+            out = out | *self.get(pos).center_notes;
+        }
+        out
+    }
+
+    pub fn selection_or_all_corner_notes(&self, selection: PositionBucket) -> NumberBucket {
+        let mut out = NumberBucket::new();
+        for pos in selection.into_iter() {
+            out = out | *self.get(pos).corner_notes;
+        }
+        out
+    }
+
+    pub fn selection_and_all_center_notes(&self, selection: PositionBucket) -> NumberBucket {
+        let mut out = NumberBucket::all();
+        for pos in selection.into_iter() {
+            out = out & *self.get(pos).center_notes;
+        }
+        out
+    }
+
+    pub fn selection_and_all_corner_notes(&self, selection: PositionBucket) -> NumberBucket {
+        let mut out = NumberBucket::all();
+        for pos in selection.into_iter() {
+            out = out & *self.get(pos).corner_notes;
+        }
+        out
     }
 }
 
