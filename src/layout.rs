@@ -1,5 +1,7 @@
-use crate::GridPosition;
+use crate::{GridPosition, Inset, insets};
+use android_activity::Rect as AndroidRect;
 use android_activity::ndk::native_window::NativeWindow;
+use log::{info, warn};
 use tiny_skia::{Color, LineJoin, Paint, PathBuilder, PixmapMut, Rect, Stroke};
 
 pub struct Palette {
@@ -100,7 +102,7 @@ impl GridLayout {
     pub fn hit(&self, x: f32, y: f32) -> Option<GridPosition> {
         let row = ((y - self.top) * 9.0 / self.size).floor();
         let col = ((x - self.left) * 9.0 / self.size).floor();
-        if (1.0 <= row && row <= 9.0) && (1.0 <= col && col <= 9.0) {
+        if (0.0 <= row && row <= 8.0) && (0.0 <= col && col <= 8.0) {
             Some(GridPosition::new(row as u8, col as u8))
         } else {
             None
@@ -109,7 +111,11 @@ impl GridLayout {
 }
 
 #[derive(Default)]
-struct ButtonLayout {}
+struct ButtonLayout {
+    num_square_top: f32,
+    num_square_left: f32,
+    num_square_size: f32,
+}
 
 #[derive(Default)]
 pub struct Layout {
@@ -118,18 +124,86 @@ pub struct Layout {
 }
 
 impl Layout {
-    pub fn new(window: &NativeWindow) -> Self {
-        let width = window.width() as f32;
-
-        let grid_size = (1.0 - 2.0 * MARGIN_FACTOR) * width;
+    pub fn new_portrait(window: Rect, insets: &[Inset]) -> Self {
+        let mut drawable_area = window;
+        for inset in insets {
+            match inset.kind {
+                crate::InsetKind::StatusBar => todo!(),
+                crate::InsetKind::NavigationBar => {
+                    if inset.rect.bottom() == window.bottom() {
+                        if let Some(rect) = Rect::from_ltrb(
+                            drawable_area.left(),
+                            drawable_area.top(),
+                            drawable_area.right(),
+                            inset.rect.bottom(),
+                        ) {
+                            drawable_area = rect;
+                        } else {
+                            warn!("invalid drawable area from cutour")
+                        };
+                    } else {
+                        warn!("unexpected cutout region")
+                    }
+                }
+                crate::InsetKind::Cutout => {
+                    if inset.rect.top() == 0.0 {
+                        if let Some(rect) = Rect::from_ltrb(
+                            drawable_area.left(),
+                            inset.rect.bottom(),
+                            drawable_area.right(),
+                            drawable_area.bottom(),
+                        ) {
+                            drawable_area = rect;
+                        } else {
+                            warn!("invalid drawable area from cutour")
+                        };
+                    } else {
+                        warn!("unexpected cutout region")
+                    }
+                }
+                crate::InsetKind::CaptionBar => todo!(),
+                crate::InsetKind::Waterfall => todo!(),
+                crate::InsetKind::SystemBars => todo!(),
+            }
+        }
+        let margin = window.width() * MARGIN_FACTOR;
+        let size = window.width() - 2.0 * margin;
+        let grid = GridLayout {
+            left: window.left() + margin,
+            top: window.top() + margin,
+            size: size,
+            bold_stroke: 3.0,
+        };
         Self {
-            grid: GridLayout {
-                top: (width - grid_size) / 2.0, // TODO proper top margin
-                left: (width - grid_size) / 2.0,
-                size: grid_size,
-                bold_stroke: 5.0, // TODO proper stroke calculation
+            grid,
+            button: ButtonLayout {
+                ..Default::default()
             },
-            button: ButtonLayout {},
+        }
+    }
+
+    pub fn new_landscape(window: Rect, insets: &[Inset]) -> Self {
+        let margin = window.height() * MARGIN_FACTOR;
+        let size = window.height() - 2.0 * margin;
+        let grid = GridLayout {
+            left: window.left() + margin,
+            top: window.top() + margin,
+            size: size,
+            bold_stroke: 3.0,
+        };
+        Self {
+            grid,
+            button: ButtonLayout {
+                ..Default::default()
+            },
+        }
+    }
+
+    pub fn new(window: Rect, insets: &[Inset]) -> Self {
+        if window.width() < window.height() {
+            Self::new_portrait(window, insets)
+        } else {
+            Self::new_landscape(window, insets)
         }
     }
 
@@ -225,6 +299,9 @@ impl Layout {
 
 pub enum Button {
     Number(u8),
+    Solid,
+    Center,
+    Corner,
 }
 
 pub enum Hit {

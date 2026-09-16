@@ -11,9 +11,12 @@ use log::{LevelFilter, info, warn};
 
 const NAME: &str = "Kudosu";
 
+mod insets;
+pub use insets::{Inset, InsetKind, get_insets};
+
 mod layout;
 use layout::{Layout, Palette};
-use tiny_skia::{FillRule, PathBuilder, Transform};
+use tiny_skia::{FillRule, PathBuilder, Rect, Transform};
 
 mod sudoku_types;
 pub use sudoku_types::{GridPosition, NineGrid, Number, NumberBucket, PositionBucket};
@@ -94,6 +97,10 @@ impl State {
         match action {
             MotionAction::Down | MotionAction::Move => match self.sel_mode {
                 SelectionMode::New => {
+                    if self.selection.count() == 1 && self.selection.contains(pos) {
+                        self.selection = PositionBucket::new();
+                        return;
+                    }
                     self.selection = pos.into();
                     self.sel_mode = SelectionMode::Add;
                 }
@@ -109,27 +116,29 @@ impl State {
                 SelectionMode::Add => self.selection.insert(pos),
                 SelectionMode::Clear => self.selection.remove(pos),
             },
-            MotionAction::Up => self.sel_mode = SelectionMode::WithOld,
+            MotionAction::Up => self.sel_mode = SelectionMode::New,
             _ => info!(
                 "marked motion action: `{:?}` as handled without change",
                 action
             ),
         }
-        self.draw_state.redraw();
     }
 
     pub fn handle_input(&mut self, input: &InputEvent) -> InputStatus {
         if let InputEvent::MotionEvent(motion_event) = input {
-            info!("received motion event: `{:?}`", motion_event);
             let pointer = motion_event.pointer_at_index(0);
             let hit = self.layout.hit(pointer.x(), pointer.y());
             match hit {
                 layout::Hit::Cell(pos) => self.handle_grid_input(pos, motion_event.action()),
                 layout::Hit::Button(button) => todo!(),
-                layout::Hit::None => {
-                    self.selection = PositionBucket::new();
-                }
+                layout::Hit::None => match self.sel_mode {
+                    SelectionMode::New | SelectionMode::WithOld => {
+                        self.selection = PositionBucket::new()
+                    }
+                    SelectionMode::Add | SelectionMode::Clear => (),
+                },
             }
+            self.draw_state.redraw();
             InputStatus::Handled
         } else {
             InputStatus::Unhandled
@@ -193,6 +202,7 @@ impl State {
             }
             MainEvent::ContentRectChanged { .. } => {
                 info!("ContentRectChanged");
+                self.draw_state.relayout();
             }
             MainEvent::GainedFocus => {
                 info!("GainedFocus");
@@ -204,9 +214,7 @@ impl State {
                 info!("ConfigChanged");
             }
             MainEvent::LowMemory => warn!("running low on memory"),
-            MainEvent::Start => {
-                info!("Start")
-            }
+            MainEvent::Start => info!("Start"),
             MainEvent::Resume { loader, .. } => {
                 info!("Resume")
             }
@@ -220,7 +228,8 @@ impl State {
                 info!("Stop")
             }
             MainEvent::InsetsChanged { .. } => {
-                info!("InsetsChanged")
+                info!("InsetsChanged");
+                self.draw_state.relayout();
             }
             _ => {
                 info!("Unknown MainEvent")
@@ -231,7 +240,10 @@ impl State {
             match self.draw_state {
                 DrawState::Ok => (),
                 DrawState::NeedsRelayout => {
-                    self.layout = Layout::new(&window);
+                    let window_rect =
+                        Rect::from_xywh(0.0, 0.0, window.width() as f32, window.height() as f32)
+                            .expect("valid window");
+                    self.layout = Layout::new(window_rect, &get_insets(&self.app));
                     self.render_frame(&window);
                 }
                 DrawState::NeedsRedraw => {
@@ -245,7 +257,6 @@ impl State {
     }
 
     pub fn render_frame(&mut self, window: &NativeWindow) {
-        info!("painting frame");
         // TODO dont spin wait
         let mut lock = loop {
             // TODO make redraw region
@@ -312,7 +323,6 @@ impl State {
             let scale = font_height / self.face.height() as f32;
             let center_y = rect.top() + rect.height() / 2.0;
             let center_x = rect.left() + rect.width() / 2.0;
-            // Cap height represents the height of flat capital letters and digits
             let cap_height = self
                 .face
                 .capital_height()
@@ -336,6 +346,7 @@ impl State {
 
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
+    // TODO remove after testing
     sudoku_types::test::number_bucket();
     sudoku_types::test::pos_bucket();
 
@@ -345,6 +356,10 @@ fn android_main(app: AndroidApp) {
             .with_tag(NAME),
     );
 
+    // app.set_window_flags(
+    //     WindowManagerFlags::LAYOUT_IN_SCREEN | WindowManagerFlags::FULLSCREEN, // TODO not done yet
+    //     WindowManagerFlags::empty(),
+    // );
     let asset_mgr = app.asset_manager();
     let path = CString::new("Libre_Baskerville/static/LibreBaskerville-Medium.ttf").unwrap();
 

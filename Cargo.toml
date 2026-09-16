@@ -16,11 +16,16 @@ tiny-skia = { version = "0.12.0", default-features = false, features = [
 	"simd",
 ] }
 ttf-parser = "0.25.1"
+jni = "0.22.4"
 
 [package.metadata.android]
 package = "com.example.myrustandroidapp"
-label = "My Rust App"
 assets = "assets"
+resources = "res"
+
+[package.metadata.android.application]
+label = "My Rust App"
+theme = "@style/AppTheme"
 
 [package.metadata.android.sdk]
 target_sdk_version = 34
