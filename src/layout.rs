@@ -16,14 +16,18 @@ impl IntoPaint for Color {
 
 pub struct Palette {
     pub background: Color,
+
     pub grid_background: Color,
     pub grid_line: Color,
-    pub text: Color,
-    pub highlight: Color,
+    pub grid_numbers: Color,
+
     pub selection: Color,
+    pub highlight: Color,
+    pub num_highlight: Color,
+
     pub button_background: Color,
-    pub button_background_active: Color,
     pub button_foreground: Color,
+    pub button_background_active: Color,
     pub button_foreground_active: Color,
 
     pub wrong_number: Color,
@@ -33,15 +37,20 @@ impl Default for Palette {
     fn default() -> Self {
         Self {
             background: unsafe { Color::from_rgba_unchecked(0.3, 0.3, 0.3, 1.0) },
+
             grid_background: Color::WHITE,
             grid_line: Color::BLACK,
-            text: Color::BLACK,
-            highlight: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.1, 1.0) },
+            grid_numbers: Color::BLACK,
+
             selection: unsafe { Color::from_rgba_unchecked(0.8, 0.1, 0.9, 1.0) },
+            highlight: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.1, 1.0) },
+            num_highlight: unsafe { Color::from_rgba_unchecked(0.2, 0.8, 0.7, 1.0) },
+
             button_background: Color::WHITE,
-            button_background_active: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.8, 1.0) },
-            button_foreground: unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.8, 1.0) },
+            button_foreground: unsafe { Color::from_rgba_unchecked(0.0, 0.0, 0.0, 1.0) },
+            button_background_active: unsafe { Color::from_rgba_unchecked(0.5, 0.5, 0.5, 1.0) },
             button_foreground_active: Color::WHITE,
+
             wrong_number: unsafe { Color::from_rgba_unchecked(0.9, 0.0, 0.0, 1.0) },
         }
     }

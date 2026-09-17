@@ -1,5 +1,5 @@
 [package]
-name = "Kudosu"
+name = "kudosu"
 version = "0.1.0"
 edition = "2024"
 
@@ -24,7 +24,7 @@ assets = "assets"
 resources = "res"
 
 [package.metadata.android.application]
-label = "My Rust App"
+label = "Kudosu"
 theme = "@style/AppTheme"
 
 [package.metadata.android.sdk]

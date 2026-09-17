@@ -8,22 +8,19 @@ use android_activity::{
     ndk::{hardware_buffer_format::HardwareBufferFormat, native_window::NativeWindow},
 };
 use log::{LevelFilter, info, warn};
+use tiny_skia::{Color, FillRule, Path, PathBuilder, PixmapMut, Rect, Transform};
+use ttf_parser::{Face, OutlineBuilder};
+
+mod insets;
+mod layout;
+mod sudoku_types;
+
+pub use insets::{Inset, InsetKind, get_insets};
+pub use layout::{Button, IntoPaint, Layout, Palette};
+pub use sudoku_types::{GridPosition, NineGrid, Number, NumberBucket, PositionBucket, Sudoku};
 
 const NAME: &str = "Kudosu";
 const CELL_MARGIN: f32 = 0.2; // TODO remove
-
-mod insets;
-pub use insets::{Inset, InsetKind, get_insets};
-
-mod layout;
-pub use layout::{IntoPaint, Layout, Palette};
-use tiny_skia::{FillRule, Path, PathBuilder, PixmapMut, Rect, Transform};
-
-mod sudoku_types;
-pub use sudoku_types::{GridPosition, NineGrid, Number, NumberBucket, PositionBucket};
-use ttf_parser::{Face, OutlineBuilder};
-
-use crate::sudoku_types::Sudoku;
 
 struct SkiaOutlineBuilder(PathBuilder);
 
@@ -77,6 +74,7 @@ impl DrawState {
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum InputMode {
     Solve,
     Center,
@@ -88,6 +86,41 @@ struct ButtonState {
     clear_on_new_selection: bool,
     input_mode: InputMode,
     secondary_input: InputMode,
+    selected_num: Option<Number>,
+}
+
+impl ButtonState {
+    pub fn is_active(&self, button: Button) -> bool {
+        match button {
+            Button::Undo | Button::Redo | Button::Delete => false,
+            Button::Number(num) => {
+                if let Some(n) = self.selected_num
+                    && n == num
+                {
+                    true
+                } else {
+                    false
+                }
+            }
+            Button::SelectionMode => self.clear_on_new_selection,
+            Button::Solve => self.input_mode == InputMode::Solve,
+            Button::Center => self.input_mode == InputMode::Center,
+            Button::Corner => self.input_mode == InputMode::Corner,
+            Button::Color => self.input_mode == InputMode::Color,
+            // TODO generic button
+            Button::Generic1 => false,
+            Button::Generic2 => false,
+            Button::Generic3 => false,
+        }
+    }
+
+    pub fn get_sel_mode(&self) -> SelectionMode {
+        if self.clear_on_new_selection {
+            SelectionMode::New
+        } else {
+            SelectionMode::WithOld
+        }
+    }
 }
 
 impl Default for ButtonState {
@@ -96,6 +129,7 @@ impl Default for ButtonState {
             clear_on_new_selection: true,
             input_mode: InputMode::Solve,
             secondary_input: InputMode::Center,
+            selected_num: None,
         }
     }
 }
@@ -141,13 +175,7 @@ impl State {
                 SelectionMode::Add => self.selection.insert(pos),
                 SelectionMode::Clear => self.selection.remove(pos),
             },
-            MotionAction::Up => {
-                self.sel_mode = if self.button_state.clear_on_new_selection {
-                    SelectionMode::New
-                } else {
-                    SelectionMode::WithOld
-                }
-            }
+            MotionAction::Up => self.sel_mode = self.button_state.get_sel_mode(),
             _ => info!(
                 "marked motion action: `{:?}` as handled without change",
                 action
@@ -164,53 +192,59 @@ impl State {
     }
 
     pub fn handle_delete(&mut self) {
-        let all_center = self.sudoku.selection_or_all_center_notes(self.selection);
-        let all_corner = self.sudoku.selection_or_all_corner_notes(self.selection);
+        let all_center = self
+            .sudoku
+            .iter_cells(self.selection)
+            .fold(NumberBucket::new(), |acc, cell| acc | *cell.center_notes);
+        let all_corner = self
+            .sudoku
+            .iter_cells(self.selection)
+            .fold(NumberBucket::new(), |acc, cell| acc | *cell.corner_notes);
         match self.button_state.input_mode {
             InputMode::Center => {
                 if !all_center.empty() {
-                    for pos in self.selection.into_iter() {
-                        self.sudoku.get_mut(pos).center_notes.clear();
-                    }
+                    self.sudoku
+                        .iter_cells_mut(self.selection)
+                        .for_each(|c| c.center_notes.clear());
                     return;
                 };
                 if !all_corner.empty() {
-                    for pos in self.selection.into_iter() {
-                        self.sudoku.get_mut(pos).corner_notes.clear();
-                    }
+                    self.sudoku
+                        .iter_cells_mut(self.selection)
+                        .for_each(|c| c.corner_notes.clear());
                     return;
                 };
-                for pos in self.selection.into_iter() {
-                    *self.sudoku.get_mut(pos).solved_number = None;
-                }
+                self.sudoku
+                    .iter_cells_mut(self.selection)
+                    .for_each(|c| *c.solved_number = None);
             }
             InputMode::Solve | InputMode::Corner => {
                 if !all_corner.empty() {
-                    for pos in self.selection.into_iter() {
-                        self.sudoku.get_mut(pos).corner_notes.clear();
-                    }
+                    self.sudoku
+                        .iter_cells_mut(self.selection)
+                        .for_each(|c| c.corner_notes.clear());
                     return;
                 };
                 if !all_center.empty() {
-                    for pos in self.selection.into_iter() {
-                        self.sudoku.get_mut(pos).center_notes.clear();
-                    }
+                    self.sudoku
+                        .iter_cells_mut(self.selection)
+                        .for_each(|c| c.center_notes.clear());
                     return;
                 };
-                for pos in self.selection.into_iter() {
-                    *self.sudoku.get_mut(pos).solved_number = None;
-                }
+                self.sudoku
+                    .iter_cells_mut(self.selection)
+                    .for_each(|c| *c.solved_number = None);
             }
             InputMode::Color => (),
         }
     }
 
     fn handle_number_input_corner(&mut self, num: Number) {
-        if self
+        let every_corner = self
             .sudoku
-            .selection_and_all_corner_notes(self.selection)
-            .contains(num)
-        {
+            .iter_cells(self.selection)
+            .fold(NumberBucket::all(), |acc, c| acc & *c.corner_notes);
+        if every_corner.contains(num) {
             for pos in self.selection.into_iter() {
                 self.sudoku.get_mut(pos).corner_notes.remove(num);
             }
@@ -222,11 +256,11 @@ impl State {
     }
 
     fn handle_number_input_center(&mut self, num: Number) {
-        if self
+        let every_center = self
             .sudoku
-            .selection_and_all_center_notes(self.selection)
-            .contains(num)
-        {
+            .iter_cells(self.selection)
+            .fold(NumberBucket::all(), |acc, c| acc & *c.center_notes);
+        if every_center.contains(num) {
             for pos in self.selection.into_iter() {
                 self.sudoku.get_mut(pos).center_notes.remove(num);
             }
@@ -238,6 +272,13 @@ impl State {
     }
 
     pub fn handle_number_input(&mut self, num: Number) {
+        if self.selection.is_empty() {
+            match self.button_state.selected_num.take() {
+                Some(sel_num) if num == sel_num => {}
+                _ => self.button_state.selected_num = Some(num),
+            }
+            return;
+        }
         match self.button_state.input_mode {
             InputMode::Solve => {
                 if self.selection.count() == 1 {
@@ -245,9 +286,13 @@ impl State {
                     *self.sudoku.get_mut(pos).solved_number = Some(num)
                 } else {
                     match self.button_state.secondary_input {
-                        InputMode::Solve | InputMode::Color => warn!("this input state is invalid"),
+                        InputMode::Solve => self
+                            .sudoku
+                            .iter_cells_mut(self.selection)
+                            .for_each(|c| *c.solved_number = Some(num)),
                         InputMode::Center => self.handle_number_input_center(num),
                         InputMode::Corner => self.handle_number_input_corner(num),
+                        InputMode::Color => warn!("this input state is invalid"),
                     }
                 }
             }
@@ -279,6 +324,7 @@ impl State {
                         layout::Button::SelectionMode => {
                             self.button_state.clear_on_new_selection =
                                 !self.button_state.clear_on_new_selection;
+                            self.sel_mode = self.button_state.get_sel_mode();
                         }
                         layout::Button::Delete => self.handle_delete(),
 
@@ -430,75 +476,47 @@ impl State {
         };
         for (rect, button) in layout.get_button_rects() {
             let path = make_rounded(rect, rect.width() / 20.0); // TODO use transform translate
-            pixmap.fill_path(
-                &path,
-                &self.palette.button_background.into_paint(),
-                FillRule::Winding,
-                Transform::identity(),
-                None,
-            );
+            let is_active = self.button_state.is_active(button);
+            let foreground_color = if is_active {
+                pixmap.fill_path(
+                    &path,
+                    &self.palette.button_background_active.into_paint(),
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+                self.palette.button_foreground_active
+            } else {
+                pixmap.fill_path(
+                    &path,
+                    &self.palette.button_background.into_paint(),
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+                self.palette.button_foreground
+            };
+
             match button {
                 layout::Button::Number(num) => {
-                    self.draw_num_into_rect(num, rect, pixmap);
+                    self.draw_num(num, rect, foreground_color, pixmap);
                 }
                 layout::Button::Undo => {}
                 layout::Button::Redo => {}
-                layout::Button::SelectionMode => {
-                    if self.button_state.clear_on_new_selection {
-                        pixmap.fill_path(
-                            &path,
-                            &self.palette.button_background_active.into_paint(),
-                            FillRule::Winding,
-                            Transform::identity(),
-                            None,
-                        );
-                    }
-                }
+                layout::Button::SelectionMode => {}
                 layout::Button::Delete => {}
                 layout::Button::Solve => {
-                    if matches!(self.button_state.input_mode, InputMode::Solve) {
-                        pixmap.fill_path(
-                            &path,
-                            &self.palette.button_background_active.into_paint(),
-                            FillRule::Winding,
-                            Transform::identity(),
-                            None,
-                        );
-                    }
+                    self.draw_num(Number(1), rect, foreground_color, pixmap);
                 }
                 layout::Button::Center => {
-                    if matches!(self.button_state.input_mode, InputMode::Center) {
-                        pixmap.fill_path(
-                            &path,
-                            &self.palette.button_background_active.into_paint(),
-                            FillRule::Winding,
-                            Transform::identity(),
-                            None,
-                        );
-                    }
+                    let bucket = NumberBucket::example();
+                    self.draw_center_notes(rect, bucket, foreground_color, pixmap);
                 }
                 layout::Button::Corner => {
-                    if matches!(self.button_state.input_mode, InputMode::Corner) {
-                        pixmap.fill_path(
-                            &path,
-                            &self.palette.button_background_active.into_paint(),
-                            FillRule::Winding,
-                            Transform::identity(),
-                            None,
-                        );
-                    }
+                    let bucket = NumberBucket::example();
+                    self.draw_corner_notes(rect, bucket, foreground_color, pixmap);
                 }
-                layout::Button::Color => {
-                    if matches!(self.button_state.input_mode, InputMode::Color) {
-                        pixmap.fill_path(
-                            &path,
-                            &self.palette.button_background_active.into_paint(),
-                            FillRule::Winding,
-                            Transform::identity(),
-                            None,
-                        );
-                    }
-                }
+                layout::Button::Color => {}
                 layout::Button::Generic1 | layout::Button::Generic2 | layout::Button::Generic3 => {}
             }
         }
@@ -511,7 +529,7 @@ impl State {
             unreachable!()
         };
 
-        let highlight = if self.selection.empty() {
+        let highlight = if self.selection.is_empty() {
             PositionBucket::new()
         } else {
             let mut hl = PositionBucket::all();
@@ -541,7 +559,7 @@ impl State {
             }
 
             if let Some(num) = cell.given_number {
-                self.draw_num_into_rect(*num, rect, pixmap);
+                self.draw_num(*num, rect, self.palette.grid_numbers, pixmap);
                 continue;
             }
             if let Some(num) = cell.solved_number {
@@ -553,33 +571,115 @@ impl State {
                         None,
                     );
                 }
-                self.draw_num_into_rect(*num, rect, pixmap);
+                self.draw_num(*num, rect, self.palette.grid_numbers, pixmap);
                 continue;
             }
 
             if !cell.center_notes.empty() {
-                let paths = cell
-                    .center_notes
-                    .into_iter()
-                    .map(|n| self.make_num_path(n))
-                    .collect::<Vec<_>>();
-                let total_advance: f32 = paths.iter().map(|p| p.advance).sum();
-                let cap_height = paths.first().unwrap().cap_height;
-                let scale = (rect.height() / 3.0 * (1.0 - 2.0 * CELL_MARGIN) / cap_height)
-                    .min(rect.width() * (1.0 - 2.0 * CELL_MARGIN / 3.0) / total_advance);
-                let mut start_x = rect.left() + rect.width() / 2.0 - total_advance * scale / 2.0;
-                let ground_line = rect.top() + rect.height() / 2.0 + cap_height * scale / 2.0;
-                for NumPath { path, advance, .. } in paths {
-                    pixmap.fill_path(
-                        &path,
-                        &self.palette.text.into_paint(),
-                        FillRule::Winding,
-                        Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
-                        None,
-                    );
-                    start_x += advance * scale;
-                }
+                self.draw_center_notes(rect, *cell.center_notes, self.palette.grid_numbers, pixmap);
             }
+
+            if !cell.corner_notes.empty() {
+                self.draw_corner_notes(rect, *cell.corner_notes, self.palette.grid_numbers, pixmap);
+            }
+        }
+    }
+
+    pub fn draw_center_notes(
+        &self,
+        rect: Rect,
+        notes: NumberBucket,
+        color: Color,
+        pixmap: &mut PixmapMut,
+    ) {
+        let paths = notes
+            .into_iter()
+            .map(|n| self.make_num_path(n))
+            .collect::<Vec<_>>();
+        let total_advance: f32 = paths.iter().map(|p| p.advance).sum();
+        let cap_height = paths.first().unwrap().cap_height;
+        let margin = rect.height() / 3.0 * CELL_MARGIN;
+        let scale = ((rect.height() / 3.0 - 2.0 * margin) / cap_height)
+            .min((rect.width() - 2.0 * margin) / total_advance);
+        let mut start_x = rect.left() + rect.width() / 2.0 - total_advance * scale / 2.0;
+        let ground_line = rect.top() + rect.height() / 2.0 + cap_height * scale / 2.0;
+        for CharPath { path, advance, .. } in paths {
+            pixmap.fill_path(
+                &path,
+                &color.into_paint(),
+                FillRule::Winding,
+                Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
+                None,
+            );
+            start_x += advance * scale;
+        }
+    }
+
+    pub fn draw_corner_notes(
+        &self,
+        rect: Rect,
+        notes: NumberBucket,
+        color: Color,
+        pixmap: &mut PixmapMut,
+    ) {
+        let paths = notes
+            .into_iter()
+            .map(|n| self.make_num_path(n))
+            .collect::<Vec<_>>();
+
+        let (top, bottom): (&[CharPath], &[CharPath]) = if paths.len() <= 2 {
+            (&paths[..], &[])
+        } else {
+            let len = paths.len();
+            let bottom_len = len / 2;
+            (&paths[..len - bottom_len], &paths[len - bottom_len..])
+        };
+        let margin = rect.height() / 3.0 * CELL_MARGIN;
+
+        let top_advance: f32 = top.iter().map(|p| p.advance).sum();
+        let bottom_advance: f32 = bottom.iter().map(|p| p.advance).sum();
+
+        let cap_height = paths.first().unwrap().cap_height;
+
+        let scale = if bottom.is_empty() {
+            ((rect.height() / 3.0 - 2.0 * margin) / cap_height)
+                .min((rect.width() - 2.0 * margin) / top_advance)
+        } else {
+            ((rect.height() / 3.0 - 2.0 * margin) / cap_height)
+                .min((rect.width() - 2.0 * margin) / top_advance)
+                .min((rect.width() - 2.0 * margin) / bottom_advance)
+        };
+
+        let top_spacing = (rect.width() - top_advance * scale - 2.0 * margin)
+            / (top.len().max(1) - 1).max(1) as f32;
+        let mut start_x = rect.left() + margin;
+
+        let ground_line = rect.top() + cap_height * scale + margin;
+        for CharPath { path, advance, .. } in top {
+            pixmap.fill_path(
+                &path,
+                &color.into_paint(),
+                FillRule::Winding,
+                Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
+                None,
+            );
+            start_x += advance * scale + top_spacing;
+        }
+
+        let bottom_spacing = (rect.width() - bottom_advance * scale - 2.0 * margin)
+            / (bottom.len().max(1) - 1).max(1) as f32;
+        let mut start_x = rect.left() + margin;
+
+        let ground_line = rect.bottom() - margin;
+        for CharPath { path, advance, .. } in bottom {
+            pixmap.fill_path(
+                &path,
+                &color.into_paint(),
+                FillRule::Winding,
+                Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
+                None,
+            );
+            start_x += advance * scale + bottom_spacing;
         }
     }
 
@@ -620,7 +720,7 @@ impl State {
         layout.draw_grid(&self.palette, &mut pixmap);
     }
 
-    fn draw_num_into_rect(&self, num: Number, rect: Rect, pixmap: &mut PixmapMut) {
+    fn draw_num(&self, num: Number, rect: Rect, color: Color, pixmap: &mut PixmapMut) {
         let l = self.make_num_path(num);
         let center_y = rect.top() + rect.height() / 2.0;
         let center_x = rect.left() + rect.width() / 2.0;
@@ -633,16 +733,21 @@ impl State {
             center_x - font_center_x * scale,
             center_y + font_center_y * scale,
         );
-        let paint = self.palette.text.into_paint();
-        pixmap.fill_path(&l.path, &paint, FillRule::Winding, transform, None);
+        pixmap.fill_path(
+            &l.path,
+            &color.into_paint(),
+            FillRule::Winding,
+            transform,
+            None,
+        );
     }
 
-    fn make_num_path(&self, num: Number) -> NumPath {
-        // TODO is this worth caching?
-        let glyph_id = self
-            .face
-            .glyph_index(num.as_char())
-            .expect("every digit is here");
+    fn make_num_path(&self, num: Number) -> CharPath {
+        self.make_char_path(num.as_char())
+    }
+
+    fn make_char_path(&self, c: char) -> CharPath {
+        let glyph_id = self.face.glyph_index(c).expect("every digit is here");
         let mut builder = SkiaOutlineBuilder(PathBuilder::new());
         self.face.outline_glyph(glyph_id, &mut builder);
         let path = builder.0.finish().expect("path should always be valid");
@@ -653,7 +758,7 @@ impl State {
             .map(|h| h as f32)
             .unwrap_or_else(|| self.face.ascender() as f32);
 
-        NumPath {
+        CharPath {
             path,
             advance: self.face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32,
             cap_height,
@@ -661,7 +766,7 @@ impl State {
     }
 }
 
-struct NumPath {
+struct CharPath {
     path: Path,
     advance: f32,
     // TODO remove fields below
@@ -690,7 +795,7 @@ pub fn make_rounded(rect: Rect, rad: f32) -> Path {
     pb.quad_to(rect.left(), rect.top(), rect.left() + rad, rect.top());
 
     pb.close();
-    pb.finish().expect("allways valid path")
+    pb.finish().expect("always valid path")
 }
 
 #[unsafe(no_mangle)]

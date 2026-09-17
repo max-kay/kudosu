@@ -3,18 +3,6 @@
 version = 4
 
 [[package]]
-name = "Kudosu"
-version = "0.1.0"
-dependencies = [
- "android-activity",
- "android_logger",
- "jni",
- "log",
- "tiny-skia",
- "ttf-parser",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -238,6 +226,18 @@ checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
 dependencies = [
  "getrandom",
  "libc",
+]
+
+[[package]]
+name = "kudosu"
+version = "0.1.0"
+dependencies = [
+ "android-activity",
+ "android_logger",
+ "jni",
+ "log",
+ "tiny-skia",
+ "ttf-parser",
 ]
 
 [[package]]

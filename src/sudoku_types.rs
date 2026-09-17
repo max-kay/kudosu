@@ -122,7 +122,7 @@ impl PositionBucket {
         (self.0 & pos.as_mask()) != 0
     }
 
-    pub fn empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0 == 0
     }
 }
@@ -209,6 +209,10 @@ impl NumberBucket {
 
     pub fn all() -> Self {
         Self((1 << 9) - 1)
+    }
+
+    pub fn example() -> Self {
+        Self((1 << 3) - 1)
     }
 
     pub fn clear(&mut self) {
@@ -407,38 +411,6 @@ impl Sudoku {
             center_notes: &mut self.center_notes[pos],
             corner_notes: &mut self.corner_notes[pos],
         }
-    }
-
-    pub fn selection_or_all_center_notes(&self, selection: PositionBucket) -> NumberBucket {
-        let mut out = NumberBucket::new();
-        for pos in selection.into_iter() {
-            out = out | *self.get(pos).center_notes;
-        }
-        out
-    }
-
-    pub fn selection_or_all_corner_notes(&self, selection: PositionBucket) -> NumberBucket {
-        let mut out = NumberBucket::new();
-        for pos in selection.into_iter() {
-            out = out | *self.get(pos).corner_notes;
-        }
-        out
-    }
-
-    pub fn selection_and_all_center_notes(&self, selection: PositionBucket) -> NumberBucket {
-        let mut out = NumberBucket::all();
-        for pos in selection.into_iter() {
-            out = out & *self.get(pos).center_notes;
-        }
-        out
-    }
-
-    pub fn selection_and_all_corner_notes(&self, selection: PositionBucket) -> NumberBucket {
-        let mut out = NumberBucket::all();
-        for pos in selection.into_iter() {
-            out = out & *self.get(pos).corner_notes;
-        }
-        out
     }
 }
 
