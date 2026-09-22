@@ -18,12 +18,9 @@ impl Iterator for PosIter {
         if self.0 == 0 {
             return None;
         }
-        let bit_idx = self.0.trailing_zeros();
-        self.0 &= !(1 << bit_idx);
-        Some(GridPosition {
-            row: (bit_idx / 9) as u8,
-            col: (bit_idx % 9) as u8,
-        })
+        let index = self.0.trailing_zeros() as u8;
+        self.0 &= !(1 << index);
+        Some(GridPosition(index))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

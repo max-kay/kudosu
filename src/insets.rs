@@ -1,8 +1,9 @@
-use android_activity::{AndroidApp, Rect as AndroidRect};
+use android_activity::AndroidApp;
 use jni::objects::{Global, JObject, JValue};
 use jni::{JavaVM, jni_sig, jni_str};
-use log::{debug, error, info, warn};
-use tiny_skia::Rect;
+use log::{error, warn};
+
+use crate::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsetKind {
@@ -33,9 +34,60 @@ impl std::ops::Deref for Inset {
     }
 }
 
+// TODO proper error
+pub fn get_bounds(app: &AndroidApp) -> Option<Rect> {
+    let window = app.native_window()?;
+    let mut drawable_area =
+        Rect::from_xywh(0.0, 0.0, window.width() as f32, window.height() as f32);
+    let window_rect = drawable_area.clone();
+    for inset in get_insets(app) {
+        match inset.kind {
+            InsetKind::NavigationBar => {
+                if inset.rect.right() == window_rect.left() {
+                    drawable_area = Rect::from_ltrb(
+                        inset.rect.right(),
+                        drawable_area.top(),
+                        drawable_area.right(),
+                        drawable_area.bottom(),
+                    );
+                } else if inset.rect.left() == window_rect.right() {
+                    drawable_area = Rect::from_ltrb(
+                        drawable_area.left(),
+                        drawable_area.top(),
+                        inset.rect.right(),
+                        drawable_area.bottom(),
+                    );
+                } else {
+                    warn!("unexpected cutout region")
+                }
+            }
+            InsetKind::Cutout => {
+                if inset.rect.left() == 0.0 {
+                    drawable_area = Rect::from_ltrb(
+                        inset.rect.right(),
+                        drawable_area.top(),
+                        drawable_area.right(),
+                        drawable_area.bottom(),
+                    );
+                } else if inset.rect.right() == window_rect.right() {
+                    drawable_area = Rect::from_ltrb(
+                        drawable_area.left(),
+                        drawable_area.top(),
+                        inset.rect.left(),
+                        drawable_area.bottom(),
+                    );
+                } else {
+                    warn!("unexpected cutout region")
+                }
+            }
+            _ => todo!(),
+        }
+    }
+    Some(drawable_area)
+}
+
 /// Returns a `Vec<Inset>` containing each inset rectangle alongside its `InsetKind`.
 pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
-    info!("get insets!!!!!!!!");
     let insets = Vec::new();
 
     let vm_ptr = app.vm_as_ptr();
@@ -232,13 +284,12 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                                     .get_field(&rect_obj, jni_str!("bottom"), jni_sig!("I"))?
                                     .i()? as f32;
                                 if r > l && b > t {
-                                    if let Some(rect) = Rect::from_ltrb(l, t, r, b) {
-                                        list.push(Inset {
-                                            kind: InsetKind::Cutout,
-                                            rect,
-                                        });
-                                        got_cutout = true;
-                                    }
+                                    let rect = Rect::from_ltrb(l, t, r, b);
+                                    list.push(Inset {
+                                        kind: InsetKind::Cutout,
+                                        rect,
+                                    });
+                                    got_cutout = true;
                                 }
                             }
                         }
@@ -269,40 +320,34 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                                 .i()? as f32;
 
                             if wl > 0.0 && win_height > 0.0 {
-                                if let Some(rect) = Rect::from_ltrb(0.0, 0.0, wl, win_height) {
-                                    list.push(Inset {
-                                        kind: InsetKind::Waterfall,
-                                        rect,
-                                    });
-                                }
+                                let rect = Rect::from_ltrb(0.0, 0.0, wl, win_height);
+                                list.push(Inset {
+                                    kind: InsetKind::Waterfall,
+                                    rect,
+                                });
                             }
                             if wr > 0.0 && win_width > 0.0 && win_height > 0.0 {
-                                if let Some(rect) =
-                                    Rect::from_ltrb(win_width - wr, 0.0, win_width, win_height)
-                                {
-                                    list.push(Inset {
-                                        kind: InsetKind::Waterfall,
-                                        rect,
-                                    });
-                                }
+                                let rect =
+                                    Rect::from_ltrb(win_width - wr, 0.0, win_width, win_height);
+                                list.push(Inset {
+                                    kind: InsetKind::Waterfall,
+                                    rect,
+                                });
                             }
                             if wt > 0.0 && win_width > 0.0 {
-                                if let Some(rect) = Rect::from_ltrb(0.0, 0.0, win_width, wt) {
-                                    list.push(Inset {
-                                        kind: InsetKind::Waterfall,
-                                        rect,
-                                    });
-                                }
+                                let rect = Rect::from_ltrb(0.0, 0.0, win_width, wt);
+                                list.push(Inset {
+                                    kind: InsetKind::Waterfall,
+                                    rect,
+                                });
                             }
                             if wb > 0.0 && win_width > 0.0 && win_height > 0.0 {
-                                if let Some(rect) =
-                                    Rect::from_ltrb(0.0, win_height - wb, win_width, win_height)
-                                {
-                                    list.push(Inset {
-                                        kind: InsetKind::Waterfall,
-                                        rect,
-                                    });
-                                }
+                                let rect =
+                                    Rect::from_ltrb(0.0, win_height - wb, win_width, win_height);
+                                list.push(Inset {
+                                    kind: InsetKind::Waterfall,
+                                    rect,
+                                });
                             }
                         }
                     }
@@ -343,44 +388,37 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                         .i()? as f32;
 
                     if nb > 0.0 {
-                        if let Some(rect) =
-                            Rect::from_ltrb(0.0, win_height - nb, win_width, win_height)
-                        {
-                            list.push(Inset {
-                                kind: InsetKind::NavigationBar,
-                                rect,
-                            });
-                            got_system_bars = true;
-                        }
+                        let rect = Rect::from_ltrb(0.0, win_height - nb, win_width, win_height);
+                        list.push(Inset {
+                            kind: InsetKind::NavigationBar,
+                            rect,
+                        });
+                        got_system_bars = true;
                     }
                     if nr > 0.0 {
-                        if let Some(rect) =
-                            Rect::from_ltrb(win_width - nr, 0.0, win_width, win_height)
-                        {
-                            list.push(Inset {
-                                kind: InsetKind::NavigationBar,
-                                rect,
-                            });
-                            got_system_bars = true;
-                        }
+                        let rect = Rect::from_ltrb(win_width - nr, 0.0, win_width, win_height);
+
+                        list.push(Inset {
+                            kind: InsetKind::NavigationBar,
+                            rect,
+                        });
+                        got_system_bars = true;
                     }
                     if nl > 0.0 {
-                        if let Some(rect) = Rect::from_ltrb(0.0, 0.0, nl, win_height) {
-                            list.push(Inset {
-                                kind: InsetKind::NavigationBar,
-                                rect,
-                            });
-                            got_system_bars = true;
-                        }
+                        let rect = Rect::from_ltrb(0.0, 0.0, nl, win_height);
+                        list.push(Inset {
+                            kind: InsetKind::NavigationBar,
+                            rect,
+                        });
+                        got_system_bars = true;
                     }
                     if nt > 0.0 {
-                        if let Some(rect) = Rect::from_ltrb(0.0, 0.0, win_width, nt) {
-                            list.push(Inset {
-                                kind: InsetKind::NavigationBar,
-                                rect,
-                            });
-                            got_system_bars = true;
-                        }
+                        let rect = Rect::from_ltrb(0.0, 0.0, win_width, nt);
+                        list.push(Inset {
+                            kind: InsetKind::NavigationBar,
+                            rect,
+                        });
+                        got_system_bars = true;
                     }
                 }
 
@@ -402,24 +440,20 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                         .i()? as f32;
 
                     if st > 0.0 {
-                        if let Some(rect) = Rect::from_ltrb(0.0, 0.0, win_width, st) {
-                            list.push(Inset {
-                                kind: InsetKind::StatusBar,
-                                rect,
-                            });
-                            got_system_bars = true;
-                        }
+                        let rect = Rect::from_ltrb(0.0, 0.0, win_width, st);
+                        list.push(Inset {
+                            kind: InsetKind::StatusBar,
+                            rect,
+                        });
+                        got_system_bars = true;
                     }
                     if sb > 0.0 {
-                        if let Some(rect) =
-                            Rect::from_ltrb(0.0, win_height - sb, win_width, win_height)
-                        {
-                            list.push(Inset {
-                                kind: InsetKind::StatusBar,
-                                rect,
-                            });
-                            got_system_bars = true;
-                        }
+                        let rect = Rect::from_ltrb(0.0, win_height - sb, win_width, win_height);
+                        list.push(Inset {
+                            kind: InsetKind::StatusBar,
+                            rect,
+                        });
+                        got_system_bars = true;
                     }
                 }
 
@@ -437,12 +471,11 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                         .get_field(&caption_insets, jni_str!("top"), jni_sig!("I"))?
                         .i()? as f32;
                     if ct > 0.0 {
-                        if let Some(rect) = Rect::from_ltrb(0.0, 0.0, win_width, ct) {
-                            list.push(Inset {
-                                kind: InsetKind::CaptionBar,
-                                rect,
-                            });
-                        }
+                        let rect = Rect::from_ltrb(0.0, 0.0, win_width, ct);
+                        list.push(Inset {
+                            kind: InsetKind::CaptionBar,
+                            rect,
+                        });
                     }
                 }
             } else if win_width > 0.0 && win_height > 0.0 {
@@ -481,42 +514,36 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                     .i()? as f32;
 
                 if st > 0.0 {
-                    if let Some(rect) = Rect::from_ltrb(0.0, 0.0, win_width, st) {
-                        list.push(Inset {
-                            kind: InsetKind::StatusBar,
-                            rect,
-                        });
-                        got_system_bars = true;
-                    }
+                    let rect = Rect::from_ltrb(0.0, 0.0, win_width, st);
+                    list.push(Inset {
+                        kind: InsetKind::StatusBar,
+                        rect,
+                    });
+                    got_system_bars = true;
                 }
                 if sb > 0.0 {
-                    if let Some(rect) = Rect::from_ltrb(0.0, win_height - sb, win_width, win_height)
-                    {
-                        list.push(Inset {
-                            kind: InsetKind::NavigationBar,
-                            rect,
-                        });
-                        got_system_bars = true;
-                    }
+                    let rect = Rect::from_ltrb(0.0, win_height - sb, win_width, win_height);
+                    list.push(Inset {
+                        kind: InsetKind::NavigationBar,
+                        rect,
+                    });
+                    got_system_bars = true;
                 }
                 if sr > 0.0 {
-                    if let Some(rect) = Rect::from_ltrb(win_width - sr, 0.0, win_width, win_height)
-                    {
-                        list.push(Inset {
-                            kind: InsetKind::NavigationBar,
-                            rect,
-                        });
-                        got_system_bars = true;
-                    }
+                    let rect = Rect::from_ltrb(win_width - sr, 0.0, win_width, win_height);
+                    list.push(Inset {
+                        kind: InsetKind::NavigationBar,
+                        rect,
+                    });
+                    got_system_bars = true;
                 }
                 if sl > 0.0 {
-                    if let Some(rect) = Rect::from_ltrb(0.0, 0.0, sl, win_height) {
-                        list.push(Inset {
-                            kind: InsetKind::NavigationBar,
-                            rect,
-                        });
-                        got_system_bars = true;
-                    }
+                    let rect = Rect::from_ltrb(0.0, 0.0, sl, win_height);
+                    list.push(Inset {
+                        kind: InsetKind::NavigationBar,
+                        rect,
+                    });
+                    got_system_bars = true;
                 }
             }
         }
@@ -560,12 +587,11 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                         )?
                         .i()? as f32;
                     if h > 0.0 {
-                        if let Some(rect) = Rect::from_ltrb(0.0, 0.0, win_width, h) {
-                            list.push(Inset {
-                                kind: InsetKind::StatusBar,
-                                rect,
-                            });
-                        }
+                        let rect = Rect::from_ltrb(0.0, 0.0, win_width, h);
+                        list.push(Inset {
+                            kind: InsetKind::StatusBar,
+                            rect,
+                        });
                     }
                 }
 
@@ -594,14 +620,11 @@ pub fn get_insets(app: &AndroidApp) -> Vec<Inset> {
                         )?
                         .i()? as f32;
                     if h > 0.0 {
-                        if let Some(rect) =
-                            Rect::from_ltrb(0.0, win_height - h, win_width, win_height)
-                        {
-                            list.push(Inset {
-                                kind: InsetKind::NavigationBar,
-                                rect,
-                            });
-                        }
+                        let rect = Rect::from_ltrb(0.0, win_height - h, win_width, win_height);
+                        list.push(Inset {
+                            kind: InsetKind::NavigationBar,
+                            rect,
+                        });
                     }
                 }
             }

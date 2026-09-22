@@ -1,40 +1,42 @@
 use core::panic;
 use std::{
+    error::Error,
+    fmt::Display,
     ops::{BitAnd, BitOr, BitXor, Index, IndexMut, Not},
     str::FromStr,
 };
 
-use ttf_parser::Face;
+use tiny_skia::{LineCap, LineJoin, PathBuilder, Stroke};
+
+use crate::canvas::Rect;
+use crate::canvas::{Canvas, Swatch};
 
 mod iter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GridPosition {
-    row: u8,
-    col: u8,
-}
+pub struct GridPosition(pub u8);
 
 impl GridPosition {
     pub fn new(row: u8, col: u8) -> Self {
         assert!(row < 9, "Gridposition with invalid row: `{}`", row);
         assert!(col < 9, "Gridposition with invalid col: `{}`", col);
-        Self { row, col }
+        Self(row * 9 + col)
     }
 
     pub fn row(&self) -> u8 {
-        self.row
+        self.0 / 9
     }
 
     pub fn col(&self) -> u8 {
-        self.col
+        self.0 % 9
     }
 
     pub fn box_(&self) -> u8 {
-        (self.row / 3) * 3 + self.col / 3
+        (self.row() / 3) * 3 + self.col() / 3
     }
 
     fn as_mask(&self) -> u128 {
-        1 << (self.row * 9 + self.col)
+        1 << self.0
     }
 }
 
@@ -46,9 +48,11 @@ impl From<GridPosition> for PositionBucket {
 
 impl GridPosition {
     pub fn sees_by_sudoku(&self) -> PositionBucket {
-        PositionBucket::col(self.col())
+        let mut bucket = PositionBucket::col(self.col())
             | PositionBucket::row(self.row())
-            | PositionBucket::box_(self.box_())
+            | PositionBucket::box_(self.box_());
+        bucket.remove(*self);
+        bucket
     }
 }
 
@@ -185,10 +189,6 @@ impl Number {
     fn as_u8(&self) -> u8 {
         self.0
     }
-
-    fn as_path(&self, face: Face) -> tiny_skia::Path {
-        todo!()
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -276,17 +276,17 @@ impl Not for NumberBucket {
     }
 }
 
-pub struct NineGrid<T>([[T; 9]; 9]);
+pub struct NineGrid<T>([T; 9 * 9]);
 
 impl<T: Copy> NineGrid<T> {
     pub fn filled(val: T) -> Self {
-        Self([[val; _]; _])
+        Self([val; _])
     }
 }
 
 impl<T> IndexMut<GridPosition> for NineGrid<T> {
     fn index_mut(&mut self, index: GridPosition) -> &mut Self::Output {
-        &mut self.0[index.row as usize][index.col as usize]
+        &mut self.0[index.0 as usize]
     }
 }
 
@@ -294,83 +294,78 @@ impl<T> Index<GridPosition> for NineGrid<T> {
     type Output = T;
 
     fn index(&self, index: GridPosition) -> &Self::Output {
-        &self.0[index.row as usize][index.col as usize]
+        &self.0[index.0 as usize]
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ParseSudokuError {
+    TooLittleCells,
+    TooManyCells,
+    InvalidChar(char),
+}
+
+impl Display for ParseSudokuError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseSudokuError::TooLittleCells => write!(f, "too little cells"),
+            ParseSudokuError::TooManyCells => write!(f, "too many cells"),
+            ParseSudokuError::InvalidChar(c) => write!(f, "invalid char {c}"),
+        }
+    }
+}
+impl Error for ParseSudokuError {}
+
 impl FromStr for NineGrid<Option<Number>> {
-    type Err = ();
+    type Err = ParseSudokuError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut numbers = [[None; 9]; 9];
+        let mut numbers = [None; _];
         let mut chars = s.chars();
-        for j in 0..9 {
-            for i in 0..9 {
-                let c = match chars.next() {
-                    Some(c) => c,
-                    None => return Err(()),
-                };
-                match c {
-                    '1'..='9' => {
-                        let num = Number::new((c as u32 - '0' as u32) as u8);
-                        numbers[j][i] = Some(num);
-                    }
-                    '.' => (),
-                    _ => return Err(()),
+        for pos in numbers.iter_mut() {
+            let c = match chars.next() {
+                Some(c) => c,
+                None => return Err(ParseSudokuError::TooLittleCells),
+            };
+            match c {
+                '1'..='9' => {
+                    let num = Number::new((c as u32 - '0' as u32) as u8);
+                    *pos = Some(num);
                 }
+                '.' => (),
+                _ => return Err(ParseSudokuError::InvalidChar(c)),
             }
         }
         if chars.next().is_some() {
-            return Err(());
+            return Err(ParseSudokuError::TooManyCells);
         }
         Ok(Self(numbers))
     }
 }
 
 impl FromStr for NineGrid<Number> {
-    type Err = ();
+    type Err = ParseSudokuError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut numbers = [[Number::new(1); 9]; 9];
+        let mut numbers = [Number::new(1); _];
         let mut chars = s.chars();
-        for j in 0..9 {
-            for i in 0..9 {
-                let c = match chars.next() {
-                    Some(c) => c,
-                    None => return Err(()),
-                };
-                match c {
-                    '1'..='9' => {
-                        let num = Number::new((c as u32 - '0' as u32) as u8);
-                        numbers[j][i] = num;
-                    }
-                    _ => return Err(()),
+        for num in numbers.iter_mut() {
+            let c = match chars.next() {
+                Some(c) => c,
+                None => return Err(ParseSudokuError::TooLittleCells),
+            };
+            match c {
+                '1'..='9' => {
+                    *num = Number::new((c as u32 - '0' as u32) as u8);
                 }
+                _ => return Err(ParseSudokuError::InvalidChar(c)),
             }
         }
         if chars.next().is_some() {
-            return Err(());
+            return Err(ParseSudokuError::TooManyCells);
         }
         Ok(Self(numbers))
     }
-}
-
-pub struct SCellMut<'a> {
-    pub given_number: &'a mut Option<Number>,
-    pub solution: &'a mut Number,
-
-    pub solved_number: &'a mut Option<Number>,
-    pub center_notes: &'a mut NumberBucket,
-    pub corner_notes: &'a mut NumberBucket,
-}
-
-pub struct SCellRef<'a> {
-    pub given_number: Option<&'a Number>,
-    pub solution: &'a Number,
-
-    pub solved_number: Option<&'a Number>,
-    pub center_notes: &'a NumberBucket,
-    pub corner_notes: &'a NumberBucket,
 }
 
 pub struct Sudoku {
@@ -414,71 +409,255 @@ impl Sudoku {
     }
 }
 
-impl Default for Sudoku {
-    fn default() -> Self {
-        // source https://qqwing.com/generate.html
-        let given =
-            ".9.8.5...6.1......78...1....5.7.....4.8...9...6..4.....275.6.....61...75...9..82.";
-        let sol =
-            "294865137631427589785391264352719648478653912169248753827536491946182375513974826";
-        Self::new(
-            FromStr::from_str(given).unwrap(),
-            FromStr::from_str(sol).unwrap(),
+pub struct SCellMut<'a> {
+    pub given_number: &'a mut Option<Number>,
+    pub solution: &'a mut Number,
+
+    pub solved_number: &'a mut Option<Number>,
+    pub center_notes: &'a mut NumberBucket,
+    pub corner_notes: &'a mut NumberBucket,
+}
+
+pub struct SCellRef<'a> {
+    pub given_number: Option<&'a Number>,
+    pub solution: &'a Number,
+
+    pub solved_number: Option<&'a Number>,
+    pub center_notes: &'a NumberBucket,
+    pub corner_notes: &'a NumberBucket,
+}
+
+#[derive(Clone, Copy)]
+pub struct GridLayout {
+    pub left: f32,
+    pub top: f32,
+    pub size: f32,
+}
+
+impl GridLayout {
+    pub fn bold_stroke(&self) -> Stroke {
+        Stroke {
+            width: self.size / 9.0 / 20.0,
+            miter_limit: 4.0,
+            line_cap: LineCap::Square,
+            line_join: LineJoin::Bevel,
+            dash: None,
+        }
+    }
+    pub fn light_stroke(&self) -> Stroke {
+        Stroke {
+            width: self.size / 9.0 / 20.0 / 3.0,
+            miter_limit: 4.0,
+            line_cap: LineCap::Square,
+            line_join: LineJoin::Bevel,
+            dash: None,
+        }
+    }
+}
+
+impl GridLayout {
+    pub fn get_rect(&self, pos: GridPosition) -> Rect {
+        Rect::from_xywh(
+            self.left + pos.col() as f32 * self.size / 9.0,
+            self.top + pos.row() as f32 * self.size / 9.0,
+            self.size / 9.0,
+            self.size / 9.0,
         )
     }
-}
-pub mod test {
-    use super::*;
-    pub fn number_bucket() {
-        let all = NumberBucket::all();
-        assert_eq!(all.0.count_ones(), 9);
-        assert_eq!(all.0.trailing_ones(), 9);
 
-        let mut bucket = NumberBucket::new();
-        bucket.insert(Number::new(1));
-        bucket.insert(Number::new(5));
-        bucket.insert(Number::new(9));
-
-        assert!(bucket.contains(Number::new(1)));
-        assert!(bucket.contains(Number::new(5)));
-        assert!(bucket.contains(Number::new(9)));
-
-        assert!(!bucket.contains(Number::new(2)));
-        assert!(!bucket.contains(Number::new(3)));
-        assert!(!bucket.contains(Number::new(7)));
-
-        let mut iter = bucket.into_iter();
-        assert_eq!(iter.next(), Some(Number::new(1)));
-        assert_eq!(iter.next(), Some(Number::new(5)));
-        assert_eq!(iter.next(), Some(Number::new(9)));
-        assert_eq!(iter.next(), None);
-    }
-
-    pub fn pos_bucket() {
-        let all = PositionBucket::all();
-        assert_eq!(all.0.count_ones(), 81);
-        assert_eq!(all.0.trailing_ones(), 81);
-
-        let mut bucket = PositionBucket::new();
-        bucket.insert(GridPosition::new(1, 1));
-        bucket.insert(GridPosition::new(5, 3));
-        bucket.insert(GridPosition::new(0, 6));
-        bucket.insert(GridPosition::new(1, 4));
-
-        assert!(bucket.contains(GridPosition::new(1, 1)));
-        assert!(bucket.contains(GridPosition::new(5, 3)));
-        assert!(bucket.contains(GridPosition::new(0, 6)));
-        assert!(bucket.contains(GridPosition::new(1, 4)));
-
-        assert!(!bucket.contains(GridPosition::new(3, 3)));
-        assert!(!bucket.contains(GridPosition::new(8, 0)));
-        assert!(!bucket.contains(GridPosition::new(2, 2)));
-
-        let mut iter = bucket.into_iter();
-        assert_eq!(iter.next(), Some(GridPosition::new(0, 6)));
-        assert_eq!(iter.next(), Some(GridPosition::new(1, 1)));
-        assert_eq!(iter.next(), Some(GridPosition::new(1, 4)));
-        assert_eq!(iter.next(), Some(GridPosition::new(5, 3)));
-        assert_eq!(iter.next(), None);
+    pub fn hit(&self, x: f32, y: f32) -> Option<GridPosition> {
+        let row = ((y - self.top) * 9.0 / self.size).floor();
+        let col = ((x - self.left) * 9.0 / self.size).floor();
+        if (0.0 <= row && row <= 8.0) && (0.0 <= col && col <= 8.0) {
+            Some(GridPosition::new(row as u8, col as u8))
+        } else {
+            None
+        }
     }
 }
+
+impl Sudoku {
+    pub fn draw_grid(layout: &GridLayout, canvas: &mut Canvas<'_>) {
+        // outline
+        let mut pb = PathBuilder::new();
+        pb.move_to(layout.left, layout.top);
+        pb.line_to(layout.left + layout.size, layout.top);
+        pb.line_to(layout.left + layout.size, layout.top + layout.size);
+        pb.line_to(layout.left, layout.top + layout.size);
+        // pb.line_to(layout.left, layout.top); // TODO necessary?
+        pb.close();
+
+        canvas.stroke_path(
+            &pb.finish().unwrap(),
+            Swatch::GridLine,
+            &layout.bold_stroke(),
+        );
+
+        // fat lines
+        let mut pb = PathBuilder::new();
+        for i in 1..=2 {
+            pb.move_to(layout.left, layout.top + layout.size * (i as f32 / 3.0));
+            pb.line_to(
+                layout.left + layout.size,
+                layout.top + layout.size * (i as f32 / 3.0),
+            );
+        }
+        for i in 1..=2 {
+            pb.move_to(layout.left + layout.size * (i as f32 / 3.0), layout.top);
+            pb.line_to(
+                layout.left + layout.size * (i as f32 / 3.0),
+                layout.top + layout.size,
+            );
+        }
+
+        canvas.stroke_path(
+            &pb.finish().unwrap(),
+            Swatch::GridLine,
+            &layout.bold_stroke(),
+        );
+
+        // horizontal
+        let mut pb = PathBuilder::new();
+        for i in 0..3 {
+            for j in 1..3 {
+                pb.move_to(
+                    layout.left,
+                    layout.top + layout.size * (i as f32 / 3.0 + j as f32 / 9.0),
+                );
+                pb.line_to(
+                    layout.left + layout.size,
+                    layout.top + layout.size * (i as f32 / 3.0 + j as f32 / 9.0),
+                );
+            }
+        }
+
+        // vertical
+        for i in 0..3 {
+            for j in 1..3 {
+                pb.move_to(
+                    layout.left + layout.size * (i as f32 / 3.0 + j as f32 / 9.0),
+                    layout.top,
+                );
+                pb.line_to(
+                    layout.left + layout.size * (i as f32 / 3.0 + j as f32 / 9.0),
+                    layout.top + layout.size,
+                );
+            }
+        }
+        canvas.stroke_path(
+            &pb.finish().unwrap(),
+            Swatch::GridLine,
+            &layout.light_stroke(),
+        );
+    }
+
+    pub fn draw_cells(&self, canvas: &mut Canvas<'_>, layout: &GridLayout) {
+        for pos in PositionBucket::all().into_iter() {
+            let rect = layout.get_rect(pos);
+            let cell = self.get(pos);
+
+            if let Some(num) = cell.given_number {
+                canvas.draw_num(*num, rect, Swatch::GridNumbers);
+                continue;
+            }
+            if let Some(num) = cell.solved_number {
+                if num != self.get(pos).solution {
+                    canvas.fill_rect(rect, Swatch::WrongNumber);
+                }
+                canvas.draw_num(*num, rect, Swatch::GridNumbers);
+                continue;
+            }
+
+            if !cell.center_notes.empty() {
+                canvas.draw_center_notes(rect, *cell.center_notes, Swatch::GridNumbers);
+            }
+
+            if !cell.corner_notes.empty() {
+                canvas.draw_corner_notes(rect, *cell.corner_notes, Swatch::GridNumbers);
+            }
+        }
+    }
+
+    fn highlight_cells(
+        canvas: &mut Canvas<'_>,
+        color: Swatch,
+        layout: &GridLayout,
+        bucket: &PositionBucket,
+    ) {
+        for pos in bucket.into_iter() {
+            canvas.fill_rect(layout.get_rect(pos), color);
+        }
+    }
+
+    pub fn render(
+        &self,
+        canvas: &mut Canvas,
+        marks: &[(Swatch, PositionBucket)],
+        layout: &GridLayout,
+    ) {
+        canvas.fill_rect(
+            Rect::from_xywh(layout.left, layout.top, layout.size, layout.size),
+            Swatch::GridBackground,
+        );
+        self.draw_cells(canvas, layout);
+        for (col, bucket) in marks {
+            Self::highlight_cells(canvas, *col, layout, bucket);
+        }
+        Self::draw_grid(layout, canvas);
+    }
+}
+// pub mod test {
+//     use super::*;
+//     pub fn number_bucket() {
+//         let all = NumberBucket::all();
+//         assert_eq!(all.0.count_ones(), 9);
+//         assert_eq!(all.0.trailing_ones(), 9);
+//
+//         let mut bucket = NumberBucket::new();
+//         bucket.insert(Number::new(1));
+//         bucket.insert(Number::new(5));
+//         bucket.insert(Number::new(9));
+//
+//         assert!(bucket.contains(Number::new(1)));
+//         assert!(bucket.contains(Number::new(5)));
+//         assert!(bucket.contains(Number::new(9)));
+//
+//         assert!(!bucket.contains(Number::new(2)));
+//         assert!(!bucket.contains(Number::new(3)));
+//         assert!(!bucket.contains(Number::new(7)));
+//
+//         let mut iter = bucket.into_iter();
+//         assert_eq!(iter.next(), Some(Number::new(1)));
+//         assert_eq!(iter.next(), Some(Number::new(5)));
+//         assert_eq!(iter.next(), Some(Number::new(9)));
+//         assert_eq!(iter.next(), None);
+//     }
+//
+//     pub fn pos_bucket() {
+//         let all = PositionBucket::all();
+//         assert_eq!(all.0.count_ones(), 81);
+//         assert_eq!(all.0.trailing_ones(), 81);
+//
+//         let mut bucket = PositionBucket::new();
+//         bucket.insert(GridPosition::new(1, 1));
+//         bucket.insert(GridPosition::new(5, 3));
+//         bucket.insert(GridPosition::new(0, 6));
+//         bucket.insert(GridPosition::new(1, 4));
+//
+//         assert!(bucket.contains(GridPosition::new(1, 1)));
+//         assert!(bucket.contains(GridPosition::new(5, 3)));
+//         assert!(bucket.contains(GridPosition::new(0, 6)));
+//         assert!(bucket.contains(GridPosition::new(1, 4)));
+//
+//         assert!(!bucket.contains(GridPosition::new(3, 3)));
+//         assert!(!bucket.contains(GridPosition::new(8, 0)));
+//         assert!(!bucket.contains(GridPosition::new(2, 2)));
+//
+//         let mut iter = bucket.into_iter();
+//         assert_eq!(iter.next(), Some(GridPosition::new(0, 6)));
+//         assert_eq!(iter.next(), Some(GridPosition::new(1, 1)));
+//         assert_eq!(iter.next(), Some(GridPosition::new(1, 4)));
+//         assert_eq!(iter.next(), Some(GridPosition::new(5, 3)));
+//         assert_eq!(iter.next(), None);
+//     }
+// }

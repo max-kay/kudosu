@@ -8,366 +8,154 @@ use android_activity::{
     ndk::{hardware_buffer_format::HardwareBufferFormat, native_window::NativeWindow},
 };
 use log::{LevelFilter, info, warn};
-use tiny_skia::{Color, FillRule, Path, PathBuilder, PixmapMut, Rect, Transform};
-use ttf_parser::{Face, OutlineBuilder};
+use ttf_parser::Face;
 
+mod canvas;
 mod insets;
-mod layout;
 mod sudoku_types;
 
+mod selection;
+mod solver;
+
+pub use canvas::Rect;
 pub use insets::{Inset, InsetKind, get_insets};
-pub use layout::{Button, IntoPaint, Layout, Palette};
+pub use selection::SelectionScreen;
 pub use sudoku_types::{GridPosition, NineGrid, Number, NumberBucket, PositionBucket, Sudoku};
 
+use crate::{
+    canvas::{Canvas, Palette, Swatch},
+    solver::Solver,
+};
+
+enum Navigation {
+    ToSelection(usize),
+    ToSolving(usize),
+    None,
+}
+
+trait Component {
+    fn handle_input(
+        &mut self,
+        input: &InputEvent,
+        draw_state_handle: &mut DrawState,
+    ) -> (InputStatus, Navigation);
+
+    fn render_frame(&self, canvas: &mut Canvas<'_>);
+
+    fn relayout(&mut self, bounds: Rect);
+}
+
 const NAME: &str = "Kudosu";
-const CELL_MARGIN: f32 = 0.2; // TODO remove
 
-struct SkiaOutlineBuilder(PathBuilder);
+struct Welcome {}
 
-impl OutlineBuilder for SkiaOutlineBuilder {
-    fn move_to(&mut self, x: f32, y: f32) {
-        self.0.move_to(x, y);
-    }
-    fn line_to(&mut self, x: f32, y: f32) {
-        self.0.line_to(x, y);
-    }
-    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        self.0.quad_to(cx, cy, x, y);
-    }
-    fn curve_to(&mut self, cx1: f32, cy1: f32, cx2: f32, cy2: f32, x: f32, y: f32) {
-        self.0.cubic_to(cx1, cy1, cx2, cy2, x, y);
-    }
-    fn close(&mut self) {
-        self.0.close();
+impl Welcome {
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
-#[derive(Copy, Clone)]
-pub enum SelectionMode {
-    New,
-    WithOld,
-    Add,
-    Clear,
-}
-
-pub enum DrawState {
-    Ok,
-    NeedsRelayout,
-    NeedsRedraw,
-}
-
-impl DrawState {
-    pub fn clear(&mut self) {
-        *self = DrawState::Ok;
-    }
-
-    pub fn relayout(&mut self) {
-        *self = DrawState::NeedsRelayout;
-    }
-
-    pub fn redraw(&mut self) {
-        if let Self::NeedsRelayout = self {
-            return;
-        } else {
-            *self = Self::NeedsRedraw;
-        }
-    }
-}
-
-#[derive(PartialEq, Eq)]
-enum InputMode {
-    Solve,
-    Center,
-    Corner,
-    Color,
-}
-
-struct ButtonState {
-    clear_on_new_selection: bool,
-    input_mode: InputMode,
-    secondary_input: InputMode,
-    selected_num: Option<Number>,
-}
-
-impl ButtonState {
-    pub fn is_active(&self, button: Button) -> bool {
-        match button {
-            Button::Undo | Button::Redo | Button::Delete => false,
-            Button::Number(num) => {
-                if let Some(n) = self.selected_num
-                    && n == num
-                {
-                    true
-                } else {
-                    false
-                }
+impl Component for Welcome {
+    fn handle_input(
+        &mut self,
+        input: &InputEvent,
+        draw_state_handle: &mut DrawState,
+    ) -> (InputStatus, Navigation) {
+        if let InputEvent::MotionEvent(motion_event) = input {
+            if matches!(motion_event.action(), MotionAction::Up) {
+                draw_state_handle.relayout();
+                return (InputStatus::Handled, Navigation::ToSelection(0));
             }
-            Button::SelectionMode => self.clear_on_new_selection,
-            Button::Solve => self.input_mode == InputMode::Solve,
-            Button::Center => self.input_mode == InputMode::Center,
-            Button::Corner => self.input_mode == InputMode::Corner,
-            Button::Color => self.input_mode == InputMode::Color,
-            // TODO generic button
-            Button::Generic1 => false,
-            Button::Generic2 => false,
-            Button::Generic3 => false,
+            return (InputStatus::Handled, Navigation::None);
+        }
+        return (InputStatus::Unhandled, Navigation::None);
+    }
+
+    fn render_frame(&self, canvas: &mut Canvas<'_>) {
+        canvas.fill(Swatch::Background);
+    }
+
+    fn relayout(&mut self, _bounds: Rect) {}
+}
+
+enum AppState {
+    Welcome(Welcome),
+    Selection(SelectionScreen),
+    Solving(Solver),
+}
+
+impl AppState {
+    fn handle_input(
+        &mut self,
+        input: &InputEvent,
+        draw_state_handle: &mut DrawState,
+    ) -> InputStatus {
+        let (status, navigation) = match self {
+            AppState::Welcome(welcome) => welcome.handle_input(input, draw_state_handle),
+            AppState::Selection(screen) => screen.handle_input(input, draw_state_handle),
+            AppState::Solving(game_state) => game_state.handle_input(input, draw_state_handle),
+        };
+        match navigation {
+            Navigation::ToSelection(i) => {
+                *self = Self::Selection(SelectionScreen::new(i));
+                draw_state_handle.relayout();
+            }
+            Navigation::ToSolving(i) => {
+                *self = Self::Solving(Solver::new(i));
+                draw_state_handle.relayout();
+            }
+
+            Navigation::None => (),
+        }
+        status
+    }
+
+    fn render_frame(&self, canvas: &mut Canvas<'_>) {
+        match self {
+            AppState::Welcome(welcome) => welcome.render_frame(canvas),
+            AppState::Selection(screen) => screen.render_frame(canvas),
+            AppState::Solving(game_state) => game_state.render_frame(canvas),
         }
     }
 
-    pub fn get_sel_mode(&self) -> SelectionMode {
-        if self.clear_on_new_selection {
-            SelectionMode::New
-        } else {
-            SelectionMode::WithOld
+    fn relayout(&mut self, bounds: Rect) {
+        match self {
+            AppState::Welcome(welcome) => welcome.relayout(bounds),
+            AppState::Selection(selection_screen) => selection_screen.relayout(bounds),
+            AppState::Solving(game_state) => game_state.relayout(bounds),
         }
     }
 }
 
-impl Default for ButtonState {
-    fn default() -> Self {
-        Self {
-            clear_on_new_selection: true,
-            input_mode: InputMode::Solve,
-            secondary_input: InputMode::Center,
-            selected_num: None,
-        }
-    }
-}
-
-pub struct State {
+pub struct MyApp {
+    state: AppState,
     running: bool,
     app: AndroidApp,
-    layout: Option<Layout>,
+
     palette: Palette,
-    sudoku: Box<Sudoku>,
-    sel_mode: SelectionMode,
-    selection: PositionBucket,
     draw_state: DrawState,
-    button_state: ButtonState,
     face: Face<'static>,
 }
 
-impl State {
+impl MyApp {
     pub fn running(&self) -> bool {
         self.running
     }
 
-    pub fn handle_grid_input(&mut self, pos: GridPosition, action: MotionAction) {
-        match action {
-            MotionAction::Down | MotionAction::Move => match self.sel_mode {
-                SelectionMode::New => {
-                    if self.selection.count() == 1 && self.selection.contains(pos) {
-                        self.selection = PositionBucket::new();
-                        return;
-                    }
-                    self.selection = pos.into();
-                    self.sel_mode = SelectionMode::Add;
-                }
-                SelectionMode::WithOld => {
-                    if self.selection.contains(pos) {
-                        self.selection.remove(pos);
-                        self.sel_mode = SelectionMode::Clear;
-                    } else {
-                        self.selection.insert(pos);
-                        self.sel_mode = SelectionMode::Add;
-                    }
-                }
-                SelectionMode::Add => self.selection.insert(pos),
-                SelectionMode::Clear => self.selection.remove(pos),
-            },
-            MotionAction::Up => self.sel_mode = self.button_state.get_sel_mode(),
-            _ => info!(
-                "marked motion action: `{:?}` as handled without change",
-                action
-            ),
-        }
-    }
-
-    pub fn undo(&mut self) {
-        // TODO
-    }
-
-    pub fn redo(&mut self) {
-        // TODO
-    }
-
-    pub fn handle_delete(&mut self) {
-        let all_center = self
-            .sudoku
-            .iter_cells(self.selection)
-            .fold(NumberBucket::new(), |acc, cell| acc | *cell.center_notes);
-        let all_corner = self
-            .sudoku
-            .iter_cells(self.selection)
-            .fold(NumberBucket::new(), |acc, cell| acc | *cell.corner_notes);
-        match self.button_state.input_mode {
-            InputMode::Center => {
-                if !all_center.empty() {
-                    self.sudoku
-                        .iter_cells_mut(self.selection)
-                        .for_each(|c| c.center_notes.clear());
-                    return;
-                };
-                if !all_corner.empty() {
-                    self.sudoku
-                        .iter_cells_mut(self.selection)
-                        .for_each(|c| c.corner_notes.clear());
-                    return;
-                };
-                self.sudoku
-                    .iter_cells_mut(self.selection)
-                    .for_each(|c| *c.solved_number = None);
-            }
-            InputMode::Solve | InputMode::Corner => {
-                if !all_corner.empty() {
-                    self.sudoku
-                        .iter_cells_mut(self.selection)
-                        .for_each(|c| c.corner_notes.clear());
-                    return;
-                };
-                if !all_center.empty() {
-                    self.sudoku
-                        .iter_cells_mut(self.selection)
-                        .for_each(|c| c.center_notes.clear());
-                    return;
-                };
-                self.sudoku
-                    .iter_cells_mut(self.selection)
-                    .for_each(|c| *c.solved_number = None);
-            }
-            InputMode::Color => (),
-        }
-    }
-
-    fn handle_number_input_corner(&mut self, num: Number) {
-        let every_corner = self
-            .sudoku
-            .iter_cells(self.selection)
-            .fold(NumberBucket::all(), |acc, c| acc & *c.corner_notes);
-        if every_corner.contains(num) {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).corner_notes.remove(num);
-            }
-        } else {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).corner_notes.insert(num);
-            }
-        }
-    }
-
-    fn handle_number_input_center(&mut self, num: Number) {
-        let every_center = self
-            .sudoku
-            .iter_cells(self.selection)
-            .fold(NumberBucket::all(), |acc, c| acc & *c.center_notes);
-        if every_center.contains(num) {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).center_notes.remove(num);
-            }
-        } else {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).center_notes.insert(num);
-            }
-        }
-    }
-
-    pub fn handle_number_input(&mut self, num: Number) {
-        if self.selection.is_empty() {
-            match self.button_state.selected_num.take() {
-                Some(sel_num) if num == sel_num => {}
-                _ => self.button_state.selected_num = Some(num),
-            }
-            return;
-        }
-        match self.button_state.input_mode {
-            InputMode::Solve => {
-                if self.selection.count() == 1 {
-                    let pos = self.selection.into_iter().next().expect("checked above");
-                    *self.sudoku.get_mut(pos).solved_number = Some(num)
-                } else {
-                    match self.button_state.secondary_input {
-                        InputMode::Solve => self
-                            .sudoku
-                            .iter_cells_mut(self.selection)
-                            .for_each(|c| *c.solved_number = Some(num)),
-                        InputMode::Center => self.handle_number_input_center(num),
-                        InputMode::Corner => self.handle_number_input_corner(num),
-                        InputMode::Color => warn!("this input state is invalid"),
-                    }
-                }
-            }
-            InputMode::Center => self.handle_number_input_center(num),
-            InputMode::Corner => self.handle_number_input_corner(num),
-            InputMode::Color => {
-                // TODO markup
-            }
-        }
-    }
-
     pub fn handle_input(&mut self, input: &InputEvent) -> InputStatus {
-        if let InputEvent::MotionEvent(motion_event) = input {
-            let pointer = motion_event.pointer_at_index(0);
-            let hit = if let Some(layout) = self.layout.as_ref() {
-                layout.hit(pointer.x(), pointer.y())
-            } else {
-                return InputStatus::Unhandled;
-            };
-            match hit {
-                layout::Hit::Cell(pos) => self.handle_grid_input(pos, motion_event.action()),
-                layout::Hit::Button(button) if motion_event.action() == MotionAction::Up => {
-                    match button {
-                        layout::Button::Number(num) => self.handle_number_input(num),
-
-                        layout::Button::Undo => self.undo(),
-                        layout::Button::Redo => self.redo(),
-
-                        layout::Button::SelectionMode => {
-                            self.button_state.clear_on_new_selection =
-                                !self.button_state.clear_on_new_selection;
-                            self.sel_mode = self.button_state.get_sel_mode();
-                        }
-                        layout::Button::Delete => self.handle_delete(),
-
-                        layout::Button::Solve => self.button_state.input_mode = InputMode::Solve,
-                        layout::Button::Center => self.button_state.input_mode = InputMode::Center,
-                        layout::Button::Corner => self.button_state.input_mode = InputMode::Corner,
-                        layout::Button::Color => self.button_state.input_mode = InputMode::Color,
-
-                        layout::Button::Generic1
-                        | layout::Button::Generic2
-                        | layout::Button::Generic3 => {
-                            info!("received generic button input")
-                        }
-                    }
-                }
-                layout::Hit::Button(_) => (),
-                layout::Hit::None => match self.sel_mode {
-                    SelectionMode::New | SelectionMode::WithOld => {
-                        self.selection = PositionBucket::new()
-                    }
-                    SelectionMode::Add | SelectionMode::Clear => (),
-                },
-            }
-            self.draw_state.redraw();
-            InputStatus::Handled
-        } else {
-            InputStatus::Unhandled
-        }
+        self.state.handle_input(input, &mut self.draw_state)
     }
 }
-impl State {
+
+impl MyApp {
     pub fn new(app: AndroidApp, face: Face<'static>) -> Self {
         Self {
             running: true,
             app,
-            layout: Default::default(),
             palette: Default::default(),
-            sudoku: Default::default(),
-            sel_mode: SelectionMode::New,
-            selection: PositionBucket::box_(5),
             face,
             draw_state: DrawState::NeedsRelayout,
-            button_state: Default::default(),
+            state: AppState::Welcome(Welcome::new()),
         }
     }
 
@@ -379,7 +167,7 @@ impl State {
             }
             PollEvent::Timeout => return,
             PollEvent::Main(main_event) => main_event,
-            _ => return, // TODO
+            _ => return,
         };
 
         match main_event {
@@ -403,7 +191,6 @@ impl State {
                 self.draw_state.redraw();
             }
             MainEvent::InputAvailable => {
-                info!("InputAvailable");
                 if let Ok(mut iter) = self.app.clone().input_events_iter() {
                     while iter.next(|i| self.handle_input(i)) {}
                 }
@@ -452,11 +239,10 @@ impl State {
             match self.draw_state {
                 DrawState::Ok => (),
                 DrawState::NeedsRelayout => {
-                    let window_rect =
-                        Rect::from_xywh(0.0, 0.0, window.width() as f32, window.height() as f32)
-                            .expect("valid window");
-                    self.layout = Some(Layout::new(window_rect, &get_insets(&self.app)));
-                    self.render_frame(&window);
+                    if let Some(rect) = insets::get_bounds(&self.app) {
+                        self.state.relayout(rect);
+                        self.render_frame(&window);
+                    }
                 }
                 DrawState::NeedsRedraw => {
                     self.render_frame(&window);
@@ -468,341 +254,98 @@ impl State {
         }
     }
 
-    pub fn draw_buttons(&mut self, pixmap: &mut PixmapMut) {
-        let layout = if let Some(l) = self.layout.as_ref() {
-            l
-        } else {
-            unreachable!()
-        };
-        for (rect, button) in layout.get_button_rects() {
-            let path = make_rounded(rect, rect.width() / 20.0); // TODO use transform translate
-            let is_active = self.button_state.is_active(button);
-            let foreground_color = if is_active {
-                pixmap.fill_path(
-                    &path,
-                    &self.palette.button_background_active.into_paint(),
-                    FillRule::Winding,
-                    Transform::identity(),
-                    None,
-                );
-                self.palette.button_foreground_active
-            } else {
-                pixmap.fill_path(
-                    &path,
-                    &self.palette.button_background.into_paint(),
-                    FillRule::Winding,
-                    Transform::identity(),
-                    None,
-                );
-                self.palette.button_foreground
-            };
-
-            match button {
-                layout::Button::Number(num) => {
-                    self.draw_num(num, rect, foreground_color, pixmap);
-                }
-                layout::Button::Undo => {}
-                layout::Button::Redo => {}
-                layout::Button::SelectionMode => {}
-                layout::Button::Delete => {}
-                layout::Button::Solve => {
-                    self.draw_num(Number(1), rect, foreground_color, pixmap);
-                }
-                layout::Button::Center => {
-                    let bucket = NumberBucket::example();
-                    self.draw_center_notes(rect, bucket, foreground_color, pixmap);
-                }
-                layout::Button::Corner => {
-                    let bucket = NumberBucket::example();
-                    self.draw_corner_notes(rect, bucket, foreground_color, pixmap);
-                }
-                layout::Button::Color => {}
-                layout::Button::Generic1 | layout::Button::Generic2 | layout::Button::Generic3 => {}
-            }
-        }
-    }
-
-    pub fn draw_cells(&mut self, pixmap: &mut PixmapMut) {
-        let layout = if let Some(l) = self.layout.as_ref() {
-            l
-        } else {
-            unreachable!()
-        };
-
-        let highlight = if self.selection.is_empty() {
-            PositionBucket::new()
-        } else {
-            let mut hl = PositionBucket::all();
-            for pos in self.selection.into_iter() {
-                hl = hl & pos.sees_by_sudoku();
-            }
-            hl
-        };
-        for pos in PositionBucket::all().into_iter() {
-            let rect = layout.get_cell_rect(pos);
-            let cell = self.sudoku.get(pos);
-
-            if self.selection.contains(pos) {
-                pixmap.fill_rect(
-                    rect,
-                    &self.palette.selection.into_paint(),
-                    Transform::identity(),
-                    None,
-                );
-            } else if highlight.contains(pos) {
-                pixmap.fill_rect(
-                    rect,
-                    &self.palette.highlight.into_paint(),
-                    Transform::identity(),
-                    None,
-                );
-            }
-
-            if let Some(num) = cell.given_number {
-                self.draw_num(*num, rect, self.palette.grid_numbers, pixmap);
-                continue;
-            }
-            if let Some(num) = cell.solved_number {
-                if num != self.sudoku.get(pos).solution {
-                    pixmap.fill_rect(
-                        rect,
-                        &self.palette.wrong_number.into_paint(),
-                        Transform::identity(),
-                        None,
-                    );
-                }
-                self.draw_num(*num, rect, self.palette.grid_numbers, pixmap);
-                continue;
-            }
-
-            if !cell.center_notes.empty() {
-                self.draw_center_notes(rect, *cell.center_notes, self.palette.grid_numbers, pixmap);
-            }
-
-            if !cell.corner_notes.empty() {
-                self.draw_corner_notes(rect, *cell.corner_notes, self.palette.grid_numbers, pixmap);
-            }
-        }
-    }
-
-    pub fn draw_center_notes(
-        &self,
-        rect: Rect,
-        notes: NumberBucket,
-        color: Color,
-        pixmap: &mut PixmapMut,
-    ) {
-        let paths = notes
-            .into_iter()
-            .map(|n| self.make_num_path(n))
-            .collect::<Vec<_>>();
-        let total_advance: f32 = paths.iter().map(|p| p.advance).sum();
-        let cap_height = paths.first().unwrap().cap_height;
-        let margin = rect.height() / 3.0 * CELL_MARGIN;
-        let scale = ((rect.height() / 3.0 - 2.0 * margin) / cap_height)
-            .min((rect.width() - 2.0 * margin) / total_advance);
-        let mut start_x = rect.left() + rect.width() / 2.0 - total_advance * scale / 2.0;
-        let ground_line = rect.top() + rect.height() / 2.0 + cap_height * scale / 2.0;
-        for CharPath { path, advance, .. } in paths {
-            pixmap.fill_path(
-                &path,
-                &color.into_paint(),
-                FillRule::Winding,
-                Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
-                None,
-            );
-            start_x += advance * scale;
-        }
-    }
-
-    pub fn draw_corner_notes(
-        &self,
-        rect: Rect,
-        notes: NumberBucket,
-        color: Color,
-        pixmap: &mut PixmapMut,
-    ) {
-        let paths = notes
-            .into_iter()
-            .map(|n| self.make_num_path(n))
-            .collect::<Vec<_>>();
-
-        let (top, bottom): (&[CharPath], &[CharPath]) = if paths.len() <= 2 {
-            (&paths[..], &[])
-        } else {
-            let len = paths.len();
-            let bottom_len = len / 2;
-            (&paths[..len - bottom_len], &paths[len - bottom_len..])
-        };
-        let margin = rect.height() / 3.0 * CELL_MARGIN;
-
-        let top_advance: f32 = top.iter().map(|p| p.advance).sum();
-        let bottom_advance: f32 = bottom.iter().map(|p| p.advance).sum();
-
-        let cap_height = paths.first().unwrap().cap_height;
-
-        let scale = if bottom.is_empty() {
-            ((rect.height() / 3.0 - 2.0 * margin) / cap_height)
-                .min((rect.width() - 2.0 * margin) / top_advance)
-        } else {
-            ((rect.height() / 3.0 - 2.0 * margin) / cap_height)
-                .min((rect.width() - 2.0 * margin) / top_advance)
-                .min((rect.width() - 2.0 * margin) / bottom_advance)
-        };
-
-        let top_spacing = (rect.width() - top_advance * scale - 2.0 * margin)
-            / (top.len().max(1) - 1).max(1) as f32;
-        let mut start_x = rect.left() + margin;
-
-        let ground_line = rect.top() + cap_height * scale + margin;
-        for CharPath { path, advance, .. } in top {
-            pixmap.fill_path(
-                &path,
-                &color.into_paint(),
-                FillRule::Winding,
-                Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
-                None,
-            );
-            start_x += advance * scale + top_spacing;
-        }
-
-        let bottom_spacing = (rect.width() - bottom_advance * scale - 2.0 * margin)
-            / (bottom.len().max(1) - 1).max(1) as f32;
-        let mut start_x = rect.left() + margin;
-
-        let ground_line = rect.bottom() - margin;
-        for CharPath { path, advance, .. } in bottom {
-            pixmap.fill_path(
-                &path,
-                &color.into_paint(),
-                FillRule::Winding,
-                Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
-                None,
-            );
-            start_x += advance * scale + bottom_spacing;
-        }
-    }
-
-    pub fn render_frame(&mut self, window: &NativeWindow) {
-        // TODO no cloning
-        let layout = if let Some(l) = self.layout.clone() {
-            l
-        } else {
-            return;
-        };
+    pub fn render_frame(&self, window: &NativeWindow) {
         // TODO dont spin wait
         let mut lock = loop {
-            // TODO make redraw region
             if let Ok(lock) = window.lock(None) {
                 break lock;
             }
         };
 
-        let bytes = lock.bytes().unwrap();
-        let mut pixmap = tiny_skia::PixmapMut::from_bytes(
+        let bytes = lock.bytes().expect("Bytes should be available");
+        let pixmap = tiny_skia::PixmapMut::from_bytes(
             unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr() as _, bytes.len()) },
             lock.stride() as u32,
             lock.height() as u32,
         )
         .unwrap();
+        let mut canvas = Canvas::new(self.face.clone(), pixmap);
+        self.state.render_frame(&mut canvas);
+    }
+}
 
-        pixmap.fill(self.palette.background);
-        pixmap.fill_rect(
-            layout.get_grid_rect(),
-            &self.palette.grid_background.into_paint(),
-            Transform::identity(),
-            None,
-        );
+pub enum DrawState {
+    Ok,
+    NeedsRelayout,
+    NeedsRedraw,
+}
 
-        self.draw_buttons(&mut pixmap);
-
-        self.draw_cells(&mut pixmap);
-        layout.draw_grid(&self.palette, &mut pixmap);
+impl DrawState {
+    pub fn clear(&mut self) {
+        *self = DrawState::Ok;
     }
 
-    fn draw_num(&self, num: Number, rect: Rect, color: Color, pixmap: &mut PixmapMut) {
-        let l = self.make_num_path(num);
-        let center_y = rect.top() + rect.height() / 2.0;
-        let center_x = rect.left() + rect.width() / 2.0;
-        let font_height = rect.height() * (1.0 - 2.0 * CELL_MARGIN);
-        let scale = font_height / l.cap_height;
-
-        let font_center_x = l.advance / 2.0;
-        let font_center_y = l.cap_height / 2.0;
-        let transform = Transform::from_scale(scale, -scale).post_translate(
-            center_x - font_center_x * scale,
-            center_y + font_center_y * scale,
-        );
-        pixmap.fill_path(
-            &l.path,
-            &color.into_paint(),
-            FillRule::Winding,
-            transform,
-            None,
-        );
+    pub fn relayout(&mut self) {
+        *self = DrawState::NeedsRelayout;
     }
 
-    fn make_num_path(&self, num: Number) -> CharPath {
-        self.make_char_path(num.as_char())
-    }
-
-    fn make_char_path(&self, c: char) -> CharPath {
-        let glyph_id = self.face.glyph_index(c).expect("every digit is here");
-        let mut builder = SkiaOutlineBuilder(PathBuilder::new());
-        self.face.outline_glyph(glyph_id, &mut builder);
-        let path = builder.0.finish().expect("path should always be valid");
-
-        let cap_height = self
-            .face
-            .capital_height()
-            .map(|h| h as f32)
-            .unwrap_or_else(|| self.face.ascender() as f32);
-
-        CharPath {
-            path,
-            advance: self.face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32,
-            cap_height,
+    pub fn redraw(&mut self) {
+        if let Self::NeedsRelayout = self {
+            return;
+        } else {
+            *self = Self::NeedsRedraw;
         }
     }
 }
 
-struct CharPath {
-    path: Path,
-    advance: f32,
-    // TODO remove fields below
-    cap_height: f32,
-}
-
-pub fn make_rounded(rect: Rect, rad: f32) -> Path {
-    let mut pb = PathBuilder::new();
-    pb.move_to(rect.left() + rad, rect.top());
-
-    pb.line_to(rect.right() - rad, rect.top());
-    pb.quad_to(rect.right(), rect.top(), rect.right(), rect.top() + rad);
-
-    pb.line_to(rect.right(), rect.bottom() - rad);
-    pb.quad_to(
-        rect.right(),
-        rect.bottom(),
-        rect.right() - rad,
-        rect.bottom(),
-    );
-
-    pb.line_to(rect.left() + rad, rect.bottom());
-    pb.quad_to(rect.left(), rect.bottom(), rect.left(), rect.bottom() - rad);
-
-    pb.line_to(rect.left(), rect.top() + rad);
-    pb.quad_to(rect.left(), rect.top(), rect.left() + rad, rect.top());
-
-    pb.close();
-    pb.finish().expect("always valid path")
-}
+const SUDOKUS: &[(&str, &str)] = &[
+    // source https://qqwing.com/generate.html
+    (
+        "..7.....82.9.......38...7........6.582......1....583...91.35..2...2..96..7..8....",
+        "467391258259874136138526749713942685825763491946158327691435872584217963372689514",
+    ),
+    (
+        "4....8.......7....6....47.3....83..7..8..5.9.5....96..3.5..6..416.9......9.3.....",
+        "457638219239571468681294753926183547718465392543729681375816924162947835894352176",
+    ),
+    (
+        ".........6.4....2.2...7.....7...6..13.58.4..6........8...4...5....21..8.75.38....",
+        "587642193634198725291573864872936541315824976469751238128467359943215687756389412",
+    ),
+    (
+        ".1.2....6...8.1...9.7........97.........9..386.8..21...5....2..2.3.86......1.7...",
+        "315279846462831795987465321539718462721694538648352179156943287273586914894127653",
+    ),
+    (
+        "684.7.9...........1...2..674...8.......95...687.2.64..7..14.2.52.....7.4.........",
+        "684573912527691348193428567456387129312954876879216453768149235231865794945732681",
+    ),
+    (
+        ".5.....1...29....3......5.29........3..54...........6..8542.....1..8.6.......189.",
+        "853274916142965783796813542928736451361548279574192368685429137419387625237651894",
+    ),
+    (
+        "28...1.....9..7.6...1.....79....2.843......9..6....2.1......9......74..24..39....",
+        "287631459549287163631549827915762384372418695864953271753126948196874532428395716",
+    ),
+    (
+        ".7........9..5.....1....98583.7....4..4.29.......31.7..52.1............1..9....52",
+        "573984126298156437416273985831765294764829513925431678652318749347592861189647352",
+    ),
+    (
+        "....64.73....739.....9..8...493...5...2....9.6...8.2.......87.436.5........7.....",
+        "918264573456873912723915846149327658832156497675489231591638724367542189284791365",
+    ),
+    (
+        "..1.24..7.......1..4....8...6..83...38.7..9.....6.1............73.2....662.3.9...",
+        "951824637873596214246137859167983542385742961492651378519468723738215496624379185",
+    ),
+];
 
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
-    // TODO remove after testing
-    sudoku_types::test::number_bucket();
-    sudoku_types::test::pos_bucket();
+    // sudoku_types::test::number_bucket();
+    // sudoku_types::test::pos_bucket();
 
     android_logger::init_once(
         android_logger::Config::default()
@@ -822,7 +365,7 @@ fn android_main(app: AndroidApp) {
     let font_bytes = font_bytes.leak(); // TODO doesn't seem rusty
     let face = ttf_parser::Face::parse(font_bytes, 0).expect("could not parse font");
     info!("Kudosu Started!");
-    let mut state = State::new(app.clone(), face);
+    let mut state = MyApp::new(app.clone(), face);
 
     while state.running() {
         // Redraw on events or poll interval
