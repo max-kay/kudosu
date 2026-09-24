@@ -8,7 +8,9 @@ use log::{info, warn};
 
 use crate::{
     Canvas, Component, DrawState, GridPosition, Navigation, Number, NumberBucket, PositionBucket,
-    Rect, SUDOKUS, Sudoku, canvas::Swatch, sudoku_types::GridLayout,
+    Rect, SUDOKUS, Sudoku,
+    canvas::Swatch,
+    sudoku_types::{Diff, GridLayout},
 };
 
 #[derive(Copy, Clone)]
@@ -85,6 +87,9 @@ pub struct Solver {
     selection: PositionBucket,
     button_state: ButtonState,
     layout: Option<Layout>,
+    needs_diff: bool,
+    undo_stack: Vec<Diff>,
+    redo_stack: Vec<Diff>,
 }
 
 impl Solver {
@@ -98,6 +103,9 @@ impl Solver {
             selection: PositionBucket::new(),
             button_state: Default::default(),
             layout: None,
+            needs_diff: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -133,14 +141,21 @@ impl Solver {
     }
 
     pub fn undo(&mut self) {
-        // TODO
+        if let Some(diff) = self.undo_stack.pop() {
+            let redo_diff = self.sudoku.apply_diff(diff);
+            self.redo_stack.push(redo_diff);
+        }
     }
 
     pub fn redo(&mut self) {
-        // TODO
+        if let Some(diff) = self.redo_stack.pop() {
+            let undo_diff = self.sudoku.apply_diff(diff);
+            self.redo_stack.push(undo_diff);
+        }
     }
 
     pub fn handle_delete(&mut self) {
+        self.needs_diff = true;
         let all_center = self
             .sudoku
             .iter_cells(self.selection)
@@ -228,6 +243,7 @@ impl Solver {
             }
             return;
         }
+        self.needs_diff = true;
         match self.button_state.input_mode {
             InputMode::Solve => {
                 if self.selection.count() == 1 {
@@ -303,57 +319,68 @@ impl Component for Solver {
         input: &InputEvent,
         draw_state_handle: &mut DrawState,
     ) -> (InputStatus, Navigation) {
-        if let InputEvent::MotionEvent(motion_event) = input {
-            let pointer = motion_event.pointer_at_index(0);
-            let hit = if let Some(layout) = self.layout.as_ref() {
-                layout.hit(pointer.x(), pointer.y())
-            } else {
-                return (InputStatus::Unhandled, Navigation::None);
-            };
-            if motion_event.action() == MotionAction::Down
-                && self.button_state.selected_num.is_some()
-            {
-                // handle input on the same number
-                self.button_state.selected_num = None;
-                draw_state_handle.redraw();
-            }
-            match hit {
-                Hit::Cell(pos) => self.handle_grid_input(pos, motion_event.action()),
-                Hit::Button(button) if motion_event.action() == MotionAction::Up => match button {
-                    Button::Number(num) => self.handle_number_input(num),
-
-                    Button::Undo => self.undo(),
-                    Button::Redo => self.redo(),
-
-                    Button::SelectionMode => {
-                        self.button_state.clear_on_new_selection =
-                            !self.button_state.clear_on_new_selection;
-                        self.sel_mode = self.button_state.get_sel_mode();
-                    }
-                    Button::Delete => self.handle_delete(),
-
-                    Button::Solve => self.button_state.input_mode = InputMode::Solve,
-                    Button::Center => self.button_state.input_mode = InputMode::Center,
-                    Button::Corner => self.button_state.input_mode = InputMode::Corner,
-                    Button::Color => self.button_state.input_mode = InputMode::Color,
-
-                    Button::Generic1 | Button::Generic2 | Button::Generic3 => {
-                        info!("received generic button input")
-                    }
-                },
-                Hit::Button(_) => {}
-                Hit::None => match self.sel_mode {
-                    SelectionMode::New | SelectionMode::WithOld => {
-                        self.selection = PositionBucket::new()
-                    }
-                    SelectionMode::Add | SelectionMode::Clear => (),
-                },
-            }
-            draw_state_handle.redraw();
-            (InputStatus::Handled, Navigation::None)
+        let motion_event = if let InputEvent::MotionEvent(motion_event) = input {
+            motion_event
         } else {
-            (InputStatus::Unhandled, Navigation::None)
+            return (InputStatus::Unhandled, Navigation::None);
+        };
+
+        let old_sudoku = self.sudoku.clone();
+
+        let pointer = motion_event.pointer_at_index(0);
+        let hit = if let Some(layout) = self.layout.as_ref() {
+            layout.hit(pointer.x(), pointer.y())
+        } else {
+            return (InputStatus::Unhandled, Navigation::None);
+        };
+        if motion_event.action() == MotionAction::Down && self.button_state.selected_num.is_some() {
+            // handle input on the same number
+            self.button_state.selected_num = None;
+            draw_state_handle.redraw();
         }
+        match hit {
+            Hit::Cell(pos) => self.handle_grid_input(pos, motion_event.action()),
+            Hit::Button(button) if motion_event.action() == MotionAction::Up => match button {
+                Button::Number(num) => self.handle_number_input(num),
+
+                Button::Undo => self.undo(),
+                Button::Redo => self.redo(),
+
+                Button::SelectionMode => {
+                    self.button_state.clear_on_new_selection =
+                        !self.button_state.clear_on_new_selection;
+                    self.sel_mode = self.button_state.get_sel_mode();
+                }
+                Button::Delete => self.handle_delete(),
+
+                Button::Solve => self.button_state.input_mode = InputMode::Solve,
+                Button::Center => self.button_state.input_mode = InputMode::Center,
+                Button::Corner => self.button_state.input_mode = InputMode::Corner,
+                Button::Color => self.button_state.input_mode = InputMode::Color,
+
+                Button::Generic1 | Button::Generic2 | Button::Generic3 => {
+                    info!("received generic button input")
+                }
+            },
+            Hit::Button(_) => {}
+            Hit::None => match self.sel_mode {
+                SelectionMode::New | SelectionMode::WithOld => {
+                    self.selection = PositionBucket::new()
+                }
+                SelectionMode::Add | SelectionMode::Clear => (),
+            },
+        }
+        draw_state_handle.redraw();
+
+        if self.needs_diff
+            && let Some(diff) = self.sudoku.form_diff(&old_sudoku)
+        {
+            self.undo_stack.push(diff);
+            self.redo_stack.clear();
+            self.needs_diff = false;
+        }
+
+        (InputStatus::Handled, Navigation::None)
     }
 
     fn render_frame(&self, canvas: &mut Canvas<'_>) {

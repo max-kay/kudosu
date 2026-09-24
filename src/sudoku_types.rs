@@ -291,6 +291,7 @@ impl Not for NumberBucket {
     }
 }
 
+#[derive(Clone)]
 pub struct NineGrid<T>([T; 9 * 9]);
 
 impl<T: Copy> NineGrid<T> {
@@ -383,6 +384,7 @@ impl FromStr for NineGrid<Number> {
     }
 }
 
+#[derive(Clone)]
 pub struct Sudoku {
     given_numbers: NineGrid<Option<Number>>,
     solution: NineGrid<Number>,
@@ -454,6 +456,18 @@ impl SCellRef<'_> {
         self.center_notes.contains(num) || self.corner_notes.contains(num)
     }
 }
+
+impl Sudoku {
+    pub fn form_diff(&self, other: &Self) -> Option<Diff> {
+        Some(Diff)
+    }
+
+    pub fn apply_diff(&mut self, diff: Diff) -> Diff {
+        Diff
+    }
+}
+
+pub struct Diff;
 
 #[derive(Clone, Copy)]
 pub struct GridLayout {
