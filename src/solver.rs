@@ -10,7 +10,7 @@ use crate::{
     Canvas, Component, DrawState, GridPosition, Navigation, Number, NumberBucket, PositionBucket,
     Rect, SUDOKUS, Sudoku,
     canvas::Swatch,
-    sudoku_types::{Diff, GridLayout},
+    sudoku_types::{Diff, DiffStack, GridLayout},
 };
 
 #[derive(Copy, Clone)]
@@ -88,8 +88,8 @@ pub struct Solver {
     button_state: ButtonState,
     layout: Option<Layout>,
     needs_diff: bool,
-    undo_stack: Vec<Diff>,
-    redo_stack: Vec<Diff>,
+    undo_stack: DiffStack,
+    redo_stack: DiffStack,
 }
 
 impl Solver {
@@ -104,8 +104,8 @@ impl Solver {
             button_state: Default::default(),
             layout: None,
             needs_diff: false,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: DiffStack::new(),
+            redo_stack: DiffStack::new(),
         }
     }
 

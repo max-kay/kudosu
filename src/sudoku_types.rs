@@ -462,12 +462,29 @@ impl Sudoku {
         Some(Diff)
     }
 
+    /// applies the diff and returns the diff to get to the original sudoku
     pub fn apply_diff(&mut self, diff: Diff) -> Diff {
         Diff
     }
 }
 
 pub struct Diff;
+
+pub struct DiffStack;
+
+impl DiffStack {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn push(&mut self, diff: Diff) {}
+
+    pub fn pop(&mut self) -> Option<Diff> {
+        Some(Diff)
+    }
+
+    pub fn clear(&mut self) {}
+}
 
 #[derive(Clone, Copy)]
 pub struct GridLayout {
