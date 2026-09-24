@@ -18,7 +18,7 @@ mod selection;
 mod solver;
 
 pub use canvas::Rect;
-pub use insets::{Inset, InsetKind, get_insets};
+
 pub use selection::SelectionScreen;
 pub use sudoku_types::{GridPosition, NineGrid, Number, NumberBucket, PositionBucket, Sudoku};
 

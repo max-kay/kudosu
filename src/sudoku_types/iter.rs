@@ -48,7 +48,7 @@ impl Iterator for NumIter {
         }
         let num = self.0.trailing_zeros() + 1;
         self.0 &= !(1 << (num - 1));
-        Some(Number(num as u8)) // TODO do directly
+        Some(Number::new(num as u8))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

@@ -2,6 +2,7 @@ use core::panic;
 use std::{
     error::Error,
     fmt::Display,
+    num::NonZeroU8,
     ops::{BitAnd, BitOr, BitXor, Index, IndexMut, Not},
     str::FromStr,
 };
@@ -35,6 +36,14 @@ impl GridPosition {
         (self.row() / 3) * 3 + self.col() / 3
     }
 
+    pub fn sees_by_sudoku(&self) -> PositionBucket {
+        let mut bucket = PositionBucket::col(self.col())
+            | PositionBucket::row(self.row())
+            | PositionBucket::box_(self.box_());
+        bucket.remove(*self);
+        bucket
+    }
+
     fn as_mask(&self) -> u128 {
         1 << self.0
     }
@@ -43,16 +52,6 @@ impl GridPosition {
 impl From<GridPosition> for PositionBucket {
     fn from(value: GridPosition) -> Self {
         PositionBucket(value.as_mask())
-    }
-}
-
-impl GridPosition {
-    pub fn sees_by_sudoku(&self) -> PositionBucket {
-        let mut bucket = PositionBucket::col(self.col())
-            | PositionBucket::row(self.row())
-            | PositionBucket::box_(self.box_());
-        bucket.remove(*self);
-        bucket
     }
 }
 
@@ -73,6 +72,9 @@ impl PositionBucket {
     }
 
     pub fn row(num: u8) -> Self {
+        if num >= 9 {
+            panic!("row num out of range")
+        }
         let mut acc = 0;
         let mut pointer = 1 << (num * 9);
         for _ in 0..9 {
@@ -84,7 +86,7 @@ impl PositionBucket {
 
     pub fn col(num: u8) -> Self {
         if num >= 9 {
-            panic!("col with number {} dne", num)
+            panic!("col num out of range")
         }
         let mut acc = 0;
         let mut pointer = 1 << num;
@@ -97,7 +99,7 @@ impl PositionBucket {
 
     pub fn box_(num: u8) -> Self {
         if num >= 9 {
-            panic!("box with number {} dne", num);
+            panic!("box num out of range");
         }
         let b_row = num / 3;
         let b_col = num % 3;
@@ -164,31 +166,44 @@ impl Not for PositionBucket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Number(pub(super) u8);
+pub struct Number(pub(super) NonZeroU8);
 
 impl Number {
     pub fn new(val: u8) -> Self {
-        if val != 0 && val <= 9 {
-            Self(val)
+        if 1 <= val && val <= 9 {
+            // SAFETY: checked above
+            unsafe { Self(NonZeroU8::new_unchecked(val)) }
         } else {
             panic!("tried to create a number out of range `{}`", val)
         }
     }
 
     fn as_mask(&self) -> u16 {
-        1 << (self.0 - 1)
+        1 << (self.as_u8() - 1)
     }
 
     pub fn as_char(&self) -> char {
-        match self.0 {
-            1..=9 => (b'0' + self.0) as char,
+        match self.as_u8() {
+            1..=9 => (b'0' + self.as_u8()) as char,
             _ => unreachable!(),
         }
     }
 
     fn as_u8(&self) -> u8 {
-        self.0
+        self.0.into()
     }
+}
+
+impl Number {
+    pub const N1: Self = Self(unsafe { NonZeroU8::new_unchecked(1) });
+    pub const N2: Self = Self(unsafe { NonZeroU8::new_unchecked(2) });
+    pub const N3: Self = Self(unsafe { NonZeroU8::new_unchecked(3) });
+    pub const N4: Self = Self(unsafe { NonZeroU8::new_unchecked(4) });
+    pub const N5: Self = Self(unsafe { NonZeroU8::new_unchecked(5) });
+    pub const N6: Self = Self(unsafe { NonZeroU8::new_unchecked(6) });
+    pub const N7: Self = Self(unsafe { NonZeroU8::new_unchecked(7) });
+    pub const N8: Self = Self(unsafe { NonZeroU8::new_unchecked(8) });
+    pub const N9: Self = Self(unsafe { NonZeroU8::new_unchecked(9) });
 }
 
 #[derive(Clone, Copy)]
@@ -373,7 +388,9 @@ pub struct Sudoku {
     solution: NineGrid<Number>,
 
     solved_numbers: NineGrid<Option<Number>>,
+    // TODO: could be inverted to [PositionBucket; 9]
     center_notes: NineGrid<NumberBucket>,
+    // TODO: could be inverted to [PositionBucket; 9]
     corner_notes: NineGrid<NumberBucket>,
 }
 
@@ -617,58 +634,3 @@ impl Sudoku {
         Self::draw_grid(layout, canvas);
     }
 }
-// pub mod test {
-//     use super::*;
-//     pub fn number_bucket() {
-//         let all = NumberBucket::all();
-//         assert_eq!(all.0.count_ones(), 9);
-//         assert_eq!(all.0.trailing_ones(), 9);
-//
-//         let mut bucket = NumberBucket::new();
-//         bucket.insert(Number::new(1));
-//         bucket.insert(Number::new(5));
-//         bucket.insert(Number::new(9));
-//
-//         assert!(bucket.contains(Number::new(1)));
-//         assert!(bucket.contains(Number::new(5)));
-//         assert!(bucket.contains(Number::new(9)));
-//
-//         assert!(!bucket.contains(Number::new(2)));
-//         assert!(!bucket.contains(Number::new(3)));
-//         assert!(!bucket.contains(Number::new(7)));
-//
-//         let mut iter = bucket.into_iter();
-//         assert_eq!(iter.next(), Some(Number::new(1)));
-//         assert_eq!(iter.next(), Some(Number::new(5)));
-//         assert_eq!(iter.next(), Some(Number::new(9)));
-//         assert_eq!(iter.next(), None);
-//     }
-//
-//     pub fn pos_bucket() {
-//         let all = PositionBucket::all();
-//         assert_eq!(all.0.count_ones(), 81);
-//         assert_eq!(all.0.trailing_ones(), 81);
-//
-//         let mut bucket = PositionBucket::new();
-//         bucket.insert(GridPosition::new(1, 1));
-//         bucket.insert(GridPosition::new(5, 3));
-//         bucket.insert(GridPosition::new(0, 6));
-//         bucket.insert(GridPosition::new(1, 4));
-//
-//         assert!(bucket.contains(GridPosition::new(1, 1)));
-//         assert!(bucket.contains(GridPosition::new(5, 3)));
-//         assert!(bucket.contains(GridPosition::new(0, 6)));
-//         assert!(bucket.contains(GridPosition::new(1, 4)));
-//
-//         assert!(!bucket.contains(GridPosition::new(3, 3)));
-//         assert!(!bucket.contains(GridPosition::new(8, 0)));
-//         assert!(!bucket.contains(GridPosition::new(2, 2)));
-//
-//         let mut iter = bucket.into_iter();
-//         assert_eq!(iter.next(), Some(GridPosition::new(0, 6)));
-//         assert_eq!(iter.next(), Some(GridPosition::new(1, 1)));
-//         assert_eq!(iter.next(), Some(GridPosition::new(1, 4)));
-//         assert_eq!(iter.next(), Some(GridPosition::new(5, 3)));
-//         assert_eq!(iter.next(), None);
-//     }
-// }

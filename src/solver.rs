@@ -280,7 +280,7 @@ impl Solver {
                 Button::SelectionMode => {}
                 Button::Delete => {}
                 Button::Solve => {
-                    canvas.draw_num(Number(1), rect, foreground_color);
+                    canvas.draw_num(Number::N1, rect, foreground_color);
                 }
                 Button::Center => {
                     let bucket = NumberBucket::example();
@@ -431,26 +431,26 @@ impl ButtonLayout {
     const N_COLS: usize = 5;
     const N_ROWS: usize = 4;
     const BUTTONS: [Button; 4 * 5] = [
-        Button::Undo,              // (0, 0)
-        Button::Number(Number(1)), // (1, 0)
-        Button::Number(Number(2)), // (2, 0)
-        Button::Number(Number(3)), // (3, 0)
-        Button::Solve,             // (4, 0)
-        Button::Redo,              // (0, 1)
-        Button::Number(Number(4)), // (1, 1)
-        Button::Number(Number(5)), // (2, 1)
-        Button::Number(Number(6)), // (3, 1)
-        Button::Corner,            // (4, 1)
-        Button::SelectionMode,     // (0, 2)
-        Button::Number(Number(7)), // (1, 2)
-        Button::Number(Number(8)), // (2, 2)
-        Button::Number(Number(9)), // (3, 2)
-        Button::Center,            // (4, 2)
-        Button::Delete,            // (0, 3)
-        Button::Generic1,          // (1, 3)
-        Button::Generic2,          // (2, 3)
-        Button::Generic3,          // (3, 3)
-        Button::Color,             // (4, 3)
+        Button::Undo,               // (0, 0)
+        Button::Number(Number::N1), // (1, 0)
+        Button::Number(Number::N2), // (2, 0)
+        Button::Number(Number::N3), // (3, 0)
+        Button::Solve,              // (4, 0)
+        Button::Redo,               // (0, 1)
+        Button::Number(Number::N4), // (1, 1)
+        Button::Number(Number::N5), // (2, 1)
+        Button::Number(Number::N6), // (3, 1)
+        Button::Corner,             // (4, 1)
+        Button::SelectionMode,      // (0, 2)
+        Button::Number(Number::N7), // (1, 2)
+        Button::Number(Number::N8), // (2, 2)
+        Button::Number(Number::N9), // (3, 2)
+        Button::Center,             // (4, 2)
+        Button::Delete,             // (0, 3)
+        Button::Generic1,           // (1, 3)
+        Button::Generic2,           // (2, 3)
+        Button::Generic3,           // (3, 3)
+        Button::Color,              // (4, 3)
     ];
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Button> {
@@ -529,9 +529,10 @@ impl Layout {
     pub fn new_landscape(window: Rect) -> Self {
         let margin = window.height() * MARGIN_FACTOR;
         let grid_size = window.height() - 2.0 * margin;
-        let ui_button_size = (window.width() - 3.0 * margin) / (ButtonLayout::N_COLS as f32 + 1.0);
+        let ui_button_size =
+            (window.width() - 4.0 * margin - grid_size) / (ButtonLayout::N_COLS as f32 + 1.0);
         let button_area = Rect::from_ltrb(
-            2.0 * margin + grid_size + ui_button_size,
+            window.left() + 2.0 * margin + grid_size + ui_button_size,
             window.bottom() - margin - ui_button_size * ButtonLayout::N_ROWS as f32,
             window.right() - margin,
             window.bottom() - margin,
@@ -539,7 +540,7 @@ impl Layout {
         let button_margin = ui_button_size / 20.0;
         let grid = GridLayout {
             left: window.left() + margin,
-            top: button_area.top() + margin,
+            top: window.top() + margin,
             size: grid_size,
         };
         Self {
