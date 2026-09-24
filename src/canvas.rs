@@ -2,7 +2,7 @@ use enum_map::{Enum, EnumMap, enum_map};
 use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, PixmapMut, Stroke, Transform};
 use ttf_parser::{Face, OutlineBuilder};
 
-use crate::{Number, NumberBucket, sudoku_types::GridLayout};
+use crate::{Number, NumberBucket};
 
 pub trait IntoPaint {
     fn into_paint(&self) -> Paint<'static>;
@@ -37,6 +37,7 @@ pub enum Swatch {
     WrongNumber,
 }
 
+#[derive(Clone)] // TODO remove Clone implementation
 pub struct Palette(EnumMap<Swatch, Color>);
 
 impl Default for Palette {
@@ -193,11 +194,11 @@ pub struct Canvas<'a> {
 }
 
 impl<'a> Canvas<'a> {
-    pub fn new(face: Face<'static>, pixmap: PixmapMut<'a>) -> Self {
+    pub fn new(face: Face<'static>, pixmap: PixmapMut<'a>, palette: Palette) -> Self {
         Self {
             pixmap,
             face,
-            palette: Default::default(),
+            palette,
         }
     }
 }

@@ -269,7 +269,7 @@ impl MyApp {
             lock.height() as u32,
         )
         .unwrap();
-        let mut canvas = Canvas::new(self.face.clone(), pixmap);
+        let mut canvas = Canvas::new(self.face.clone(), pixmap, self.palette.clone());
         self.state.render_frame(&mut canvas);
     }
 }
