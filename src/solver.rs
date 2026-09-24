@@ -10,7 +10,7 @@ use crate::{
     Canvas, Component, DrawState, GridPosition, Navigation, Number, NumberBucket, PositionBucket,
     Rect, SUDOKUS, Sudoku,
     canvas::Swatch,
-    sudoku_types::{Diff, DiffStack, GridLayout},
+    sudoku_types::{DiffStack, GridLayout},
 };
 
 #[derive(Copy, Clone)]
@@ -89,7 +89,6 @@ pub struct Solver {
     layout: Option<Layout>,
     needs_diff: bool,
     undo_stack: DiffStack,
-    redo_stack: DiffStack,
 }
 
 impl Solver {
@@ -105,7 +104,6 @@ impl Solver {
             layout: None,
             needs_diff: false,
             undo_stack: DiffStack::new(),
-            redo_stack: DiffStack::new(),
         }
     }
 
@@ -142,15 +140,17 @@ impl Solver {
 
     pub fn undo(&mut self) {
         if let Some(diff) = self.undo_stack.pop() {
-            let redo_diff = self.sudoku.apply_diff(diff);
-            self.redo_stack.push(redo_diff);
+            self.sudoku.apply_diff(diff);
+        } else {
+            info!("No undo left")
         }
     }
 
     pub fn redo(&mut self) {
-        if let Some(diff) = self.redo_stack.pop() {
-            let undo_diff = self.sudoku.apply_diff(diff);
-            self.redo_stack.push(undo_diff);
+        if let Some(diff) = self.undo_stack.unpop() {
+            self.sudoku.apply_diff(diff);
+        } else {
+            info!("No redo left")
         }
     }
 
@@ -166,13 +166,13 @@ impl Solver {
             .fold(NumberBucket::new(), |acc, cell| acc | *cell.corner_notes);
         match self.button_state.input_mode {
             InputMode::Center => {
-                if !all_center.empty() {
+                if !all_center.is_empty() {
                     self.sudoku
                         .iter_cells_mut(self.selection)
                         .for_each(|c| c.center_notes.clear());
                     return;
                 };
-                if !all_corner.empty() {
+                if !all_corner.is_empty() {
                     self.sudoku
                         .iter_cells_mut(self.selection)
                         .for_each(|c| c.corner_notes.clear());
@@ -183,13 +183,13 @@ impl Solver {
                     .for_each(|c| *c.solved_number = None);
             }
             InputMode::Solve | InputMode::Corner => {
-                if !all_corner.empty() {
+                if !all_corner.is_empty() {
                     self.sudoku
                         .iter_cells_mut(self.selection)
                         .for_each(|c| c.corner_notes.clear());
                     return;
                 };
-                if !all_center.empty() {
+                if !all_center.is_empty() {
                     self.sudoku
                         .iter_cells_mut(self.selection)
                         .for_each(|c| c.center_notes.clear());
@@ -376,7 +376,6 @@ impl Component for Solver {
             && let Some(diff) = self.sudoku.form_diff(&old_sudoku)
         {
             self.undo_stack.push(diff);
-            self.redo_stack.clear();
             self.needs_diff = false;
         }
 
@@ -458,12 +457,12 @@ impl ButtonLayout {
     const N_COLS: usize = 5;
     const N_ROWS: usize = 4;
     const BUTTONS: [Button; 4 * 5] = [
-        Button::Undo,               // (0, 0)
+        Button::Redo,               // (0, 0)
         Button::Number(Number::N1), // (1, 0)
         Button::Number(Number::N2), // (2, 0)
         Button::Number(Number::N3), // (3, 0)
         Button::Solve,              // (4, 0)
-        Button::Redo,               // (0, 1)
+        Button::Undo,               // (0, 1)
         Button::Number(Number::N4), // (1, 1)
         Button::Number(Number::N5), // (2, 1)
         Button::Number(Number::N6), // (3, 1)

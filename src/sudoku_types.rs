@@ -3,10 +3,11 @@ use std::{
     error::Error,
     fmt::Display,
     num::NonZeroU8,
-    ops::{BitAnd, BitOr, BitXor, Index, IndexMut, Not},
+    ops::{BitAnd, BitOr, BitXor, BitXorAssign, Index, IndexMut, Not},
     str::FromStr,
 };
 
+use log::info;
 use tiny_skia::{LineCap, LineJoin, PathBuilder, Stroke};
 
 use crate::canvas::Rect;
@@ -157,6 +158,12 @@ impl BitXor for PositionBucket {
     }
 }
 
+impl BitXorAssign for PositionBucket {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        *self = *self ^ rhs;
+    }
+}
+
 impl Not for PositionBucket {
     type Output = PositionBucket;
 
@@ -254,7 +261,7 @@ impl NumberBucket {
         (self.0 & num.as_mask()) != 0
     }
 
-    pub fn empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0 == 0
     }
 }
@@ -280,6 +287,12 @@ impl BitXor for NumberBucket {
 
     fn bitxor(self, rhs: Self) -> Self::Output {
         Self(self.0 ^ rhs.0)
+    }
+}
+
+impl BitXorAssign for NumberBucket {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        *self = *self ^ rhs;
     }
 }
 
@@ -386,13 +399,14 @@ impl FromStr for NineGrid<Number> {
 
 #[derive(Clone)]
 pub struct Sudoku {
+    // TODO: this could be a Positionbucket Mask on self.solution
     given_numbers: NineGrid<Option<Number>>,
     solution: NineGrid<Number>,
 
     solved_numbers: NineGrid<Option<Number>>,
-    // TODO: could be inverted to [PositionBucket; 9]
+
+    // TODO: could be inverted to [PositionBucket; 9] 144  insteadof size 162
     center_notes: NineGrid<NumberBucket>,
-    // TODO: could be inverted to [PositionBucket; 9]
     corner_notes: NineGrid<NumberBucket>,
 }
 
@@ -459,31 +473,213 @@ impl SCellRef<'_> {
 
 impl Sudoku {
     pub fn form_diff(&self, other: &Self) -> Option<Diff> {
-        Some(Diff)
+        let mut solved_diff = Vec::new();
+        for pos in PositionBucket::all().into_iter() {
+            // SAFETY: both types have same size an align
+            let xor = unsafe {
+                std::mem::transmute::<_, u8>(self.solved_numbers[pos])
+                    ^ std::mem::transmute::<_, u8>(other.solved_numbers[pos])
+            };
+            if xor != 0 {
+                solved_diff.push((pos, xor))
+            }
+        }
+        let mut corner_diff = Vec::new();
+
+        for pos in PositionBucket::all().into_iter() {
+            let xor = self.corner_notes[pos] ^ other.corner_notes[pos];
+            if !xor.is_empty() {
+                corner_diff.push((pos, xor))
+            }
+        }
+
+        let mut center_diff = Vec::new();
+        for pos in PositionBucket::all().into_iter() {
+            let xor = self.center_notes[pos] ^ other.center_notes[pos];
+            if !xor.is_empty() {
+                center_diff.push((pos, xor))
+            }
+        }
+
+        if solved_diff.len() == 0 && corner_diff.len() == 0 && center_diff.len() == 0 {
+            return None;
+        }
+
+        Some(Diff {
+            solved_diff,
+            corner_diff,
+            center_diff,
+        })
     }
 
-    /// applies the diff and returns the diff to get to the original sudoku
-    pub fn apply_diff(&mut self, diff: Diff) -> Diff {
-        Diff
+    pub fn apply_diff(&mut self, diff: DiffRef) {
+        for (pos, xor) in diff.solved_diff() {
+            unsafe {
+                // SAFETY since xor is from valid a ^ b and field is either a or b we get b or a
+                // respectively back and thus dont break the invariants of Option<Number>
+                let field: &mut u8 = &mut *(&mut self.solved_numbers[*pos] as *mut _ as *mut u8);
+                *field ^= xor
+            }
+        }
+        for (pos, xor) in diff.corner_diff() {
+            self.corner_notes[*pos] ^= *xor;
+        }
+        for (pos, xor) in diff.center_diff() {
+            self.center_notes[*pos] ^= *xor;
+        }
     }
 }
 
-pub struct Diff;
+// every diff must be non empty
+pub struct Diff {
+    solved_diff: Vec<(GridPosition, u8)>,
+    corner_diff: Vec<(GridPosition, NumberBucket)>,
+    center_diff: Vec<(GridPosition, NumberBucket)>,
+}
 
-pub struct DiffStack;
+fn transmute_to_u8<T>(s: &[T]) -> &[u8] {
+    let byte_len = std::mem::size_of::<T>() * s.len();
+    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, byte_len) }
+}
+
+unsafe fn transmute_from_u8<T>(s: &[u8]) -> &[T] {
+    let count = s.len() / std::mem::size_of::<T>();
+    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const T, count) }
+}
+
+pub struct DiffRef<'a> {
+    data: &'a [u8],
+    solved_len: u8,
+    corner_len: u8,
+    center_len: u8,
+}
+
+impl<'a> DiffRef<'a> {
+    pub fn solved_diff(&self) -> impl Iterator<Item = &'a (GridPosition, u8)> {
+        let len = self.solved_len as usize * size_of::<(GridPosition, u8)>();
+        unsafe { transmute_from_u8(&self.data[..len]) }.iter()
+    }
+    pub fn corner_diff(&self) -> impl Iterator<Item = &'a (GridPosition, NumberBucket)> {
+        let start = self.solved_len as usize * size_of::<(GridPosition, u8)>();
+        let len = self.corner_len as usize * size_of::<(GridPosition, NumberBucket)>();
+        unsafe { transmute_from_u8(&self.data[start..][..len]) }.iter()
+    }
+
+    pub fn center_diff(&self) -> impl Iterator<Item = &'a (GridPosition, NumberBucket)> {
+        let start = self.solved_len as usize * size_of::<(GridPosition, u8)>()
+            + self.corner_len as usize * size_of::<(GridPosition, NumberBucket)>();
+        let len = self.center_len as usize * size_of::<(GridPosition, NumberBucket)>();
+        unsafe { transmute_from_u8(&self.data[start..][..len]) }.iter()
+    }
+}
+
+pub struct DiffStack {
+    stack: Vec<u8>,
+    pointer: usize,
+}
 
 impl DiffStack {
+    const PREAMBLE_SIZE: usize = 4;
     pub fn new() -> Self {
-        Self
+        Self {
+            stack: vec![0; Self::PREAMBLE_SIZE],
+            pointer: 0,
+        }
     }
 
-    pub fn push(&mut self, diff: Diff) {}
+    pub fn push(&mut self, diff: Diff) {
+        // SAFETY pointer is always less that self.stack.len()
+        unsafe {
+            self.stack.set_len(self.pointer);
+        }
+        let total_len = (&diff).solved_diff.len() * 2
+            + (&diff).corner_diff.len() * 4
+            + (&diff).center_diff.len() * 4
+            + 2 * Self::PREAMBLE_SIZE;
 
-    pub fn pop(&mut self) -> Option<Diff> {
-        Some(Diff)
+        self.stack.reserve(total_len + Self::PREAMBLE_SIZE);
+        // each vec can at most have 9*9 = 81 elements
+        // we can use a u8 each to describe the len
+        self.stack.push((&diff).solved_diff.len() as u8);
+        self.stack.push((&diff).corner_diff.len() as u8);
+        self.stack.push((&diff).center_diff.len() as u8);
+        self.stack.push(0xFF); // pad
+
+        self.stack
+            .extend_from_slice(transmute_to_u8(&(&diff).solved_diff));
+        self.stack
+            .extend_from_slice(transmute_to_u8(&(&diff).corner_diff));
+        self.stack
+            .extend_from_slice(transmute_to_u8(&(&diff).center_diff));
+
+        self.stack.push((&diff).solved_diff.len() as u8);
+        self.stack.push((&diff).corner_diff.len() as u8);
+        self.stack.push((&diff).center_diff.len() as u8);
+        self.stack.push(0xFF); // pad
+
+        self.pointer += total_len;
+        debug_assert!(self.pointer == self.stack.len());
+        self.stack.extend_from_slice(&[0; 4]);
     }
 
-    pub fn clear(&mut self) {}
+    pub fn pop<'a>(&'a mut self) -> Option<DiffRef<'a>> {
+        if self.pointer == 0 {
+            return None;
+        }
+        let lens = &self.stack[self.pointer - Self::PREAMBLE_SIZE..self.pointer];
+        let solved_len = lens[0];
+        let corner_len = lens[1];
+        let center_len = lens[2];
+        let data_len = solved_len as usize * 2 + corner_len as usize * 4 + center_len as usize * 4;
+
+        let diff = DiffRef {
+            data: &self.stack
+                [self.pointer - data_len - Self::PREAMBLE_SIZE..self.pointer - Self::PREAMBLE_SIZE],
+            solved_len,
+            corner_len,
+            center_len,
+        };
+        self.pointer -= data_len + 2 * Self::PREAMBLE_SIZE;
+        Some(diff)
+    }
+
+    pub fn unpop<'a>(&'a mut self) -> Option<DiffRef<'a>> {
+        let lens = &self.stack[self.pointer..][..Self::PREAMBLE_SIZE];
+        if lens.iter().all(|x| *x == 0) {
+            return None;
+        }
+        let solved_len = lens[0];
+        let corner_len = lens[1];
+        let center_len = lens[2];
+        let data_len = solved_len as usize * 2 + corner_len as usize * 4 + center_len as usize * 4;
+
+        let diff = DiffRef {
+            data: &self.stack[self.pointer + Self::PREAMBLE_SIZE..][..data_len],
+            solved_len,
+            corner_len,
+            center_len,
+        };
+        self.pointer += data_len + 2 * Self::PREAMBLE_SIZE;
+        Some(diff)
+    }
+
+    #[allow(unused)]
+    pub fn log_state(&self) {
+        info!("ptr: {:?}", self.pointer);
+        info!("vec_len: {:?}", self.stack.len());
+        if self.pointer > 0 {
+            info!(
+                "below lens: {:?}",
+                &self.stack[self.pointer - Self::PREAMBLE_SIZE..self.pointer]
+            );
+        } else {
+            info!("below lens: --");
+        }
+        info!(
+            "lens above: {:?}",
+            &self.stack[self.pointer..][..Self::PREAMBLE_SIZE]
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -627,11 +823,11 @@ impl Sudoku {
                 continue;
             }
 
-            if !cell.center_notes.empty() {
+            if !cell.center_notes.is_empty() {
                 canvas.draw_center_notes(rect, *cell.center_notes, Swatch::GridNumbers);
             }
 
-            if !cell.corner_notes.empty() {
+            if !cell.corner_notes.is_empty() {
                 canvas.draw_corner_notes(rect, *cell.corner_notes, Swatch::GridNumbers);
             }
         }
