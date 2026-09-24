@@ -42,23 +42,25 @@ pub struct Palette(EnumMap<Swatch, Color>);
 
 impl Default for Palette {
     fn default() -> Self {
+        // SAFETY: All color components below are compile-time constants within [0.0, 1.0]
+        // and alpha is 1.0 (so color channels are trivially valid pre-multiplied values).
         Self(enum_map! {
-        Swatch::Background=> unsafe { Color::from_rgba_unchecked(0.3, 0.3, 0.3, 1.0) },
+            Swatch::Background=> unsafe { Color::from_rgba_unchecked(0.3, 0.3, 0.3, 1.0) },
 
-        Swatch::GridBackground=> Color::WHITE,
-        Swatch::GridLine=> Color::BLACK,
-        Swatch::GridNumbers=> Color::BLACK,
+            Swatch::GridBackground=> Color::WHITE,
+            Swatch::GridLine=> Color::BLACK,
+            Swatch::GridNumbers=> Color::BLACK,
 
-        Swatch::Selection=> unsafe { Color::from_rgba_unchecked(0.8, 0.1, 0.9, 1.0) },
-        Swatch::Highlight=> unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.1, 1.0) },
-        Swatch::NumHighlight=> unsafe { Color::from_rgba_unchecked(0.2, 0.8, 0.7, 1.0) },
+            Swatch::Selection=> unsafe { Color::from_rgba_unchecked(0.8, 0.1, 0.9, 1.0) },
+            Swatch::Highlight=> unsafe { Color::from_rgba_unchecked(0.8, 0.8, 0.1, 1.0) },
+            Swatch::NumHighlight=> unsafe { Color::from_rgba_unchecked(0.2, 0.8, 0.7, 1.0) },
 
-        Swatch::ButtonBackground=> Color::WHITE,
-        Swatch::ButtonForeground=> unsafe { Color::from_rgba_unchecked(0.0, 0.0, 0.0, 1.0) },
-        Swatch::ButtonBackgroundActive=> unsafe { Color::from_rgba_unchecked(0.5, 0.5, 0.5, 1.0) },
-        Swatch::ButtonForegroundActive=> Color::WHITE,
+            Swatch::ButtonBackground=> Color::WHITE,
+            Swatch::ButtonForeground=> unsafe { Color::from_rgba_unchecked(0.0, 0.0, 0.0, 1.0) },
+            Swatch::ButtonBackgroundActive=> unsafe { Color::from_rgba_unchecked(0.5, 0.5, 0.5, 1.0) },
+            Swatch::ButtonForegroundActive=> Color::WHITE,
 
-        Swatch::WrongNumber=> unsafe { Color::from_rgba_unchecked(0.9, 0.0, 0.0, 1.0) },
+            Swatch::WrongNumber=> unsafe { Color::from_rgba_unchecked(0.9, 0.0, 0.0, 1.0) },
         })
     }
 }

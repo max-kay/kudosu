@@ -88,11 +88,11 @@ impl<'a> Iterator for CellIterMut<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.pos_iter.next().map(|pos| {
-            // SAFETY: `pos_iter` yields each position at most once, so the
-            // `SCellMut`s produced by successive calls to `next` never
-            // reference the same cell. That means it's sound to hand out a
-            // mutable borrow with lifetime `'a` instead of the shorter
-            // lifetime of `&mut self`, exactly as `slice::IterMut` does.
+            // SAFETY: `self.sudoku` points to a valid, live `Sudoku` for lifetime `'a`.
+            // Furthermore, `pos_iter` yields each `GridPosition` at most once, guaranteeing
+            // that successive calls to `next()` produce disjoint mutable borrows to distinct
+            // cells. Extending the returned `SCellMut` lifetime to `'a` is therefore sound
+            // and never introduces aliased mutable references, analogous to `slice::IterMut`.
             let sudoku: &'a mut Sudoku = unsafe { &mut *(self.sudoku as *mut Sudoku) };
             sudoku.get_mut(pos)
         })

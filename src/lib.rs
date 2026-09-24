@@ -264,6 +264,9 @@ impl MyApp {
 
         let bytes = lock.bytes().expect("Bytes should be available");
         let pixmap = tiny_skia::PixmapMut::from_bytes(
+            // SAFETY: `lock` holds exclusive access to the underlying native window buffer
+            // for the duration of this frame. Casting its raw pointer to `*mut u8` and creating
+            // a mutable slice is sound because `lock` is the sole owner and no other references exist.
             unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr() as _, bytes.len()) },
             lock.stride() as u32,
             lock.height() as u32,
@@ -342,6 +345,8 @@ const SUDOKUS: &[(&str, &str)] = &[
     ),
 ];
 
+// SAFETY: `android_main` is the standard entrypoint symbol required by `android_activity`.
+// Disabling name mangling is required for the OS loader/activity glue to locate and invoke it.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     // sudoku_types::test::number_bucket();

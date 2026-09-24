@@ -178,7 +178,7 @@ pub struct Number(pub(super) NonZeroU8);
 impl Number {
     pub fn new(val: u8) -> Self {
         if 1 <= val && val <= 9 {
-            // SAFETY: checked above
+            // SAFETY: `val` was verified to be in 1..=9, so it is strictly non-zero.
             unsafe { Self(NonZeroU8::new_unchecked(val)) }
         } else {
             panic!("tried to create a number out of range `{}`", val)
@@ -202,6 +202,7 @@ impl Number {
 }
 
 impl Number {
+    // SAFETY: The literal constants 1 through 9 are all non-zero, satisfying `NonZeroU8` invariant.
     pub const N1: Self = Self(unsafe { NonZeroU8::new_unchecked(1) });
     pub const N2: Self = Self(unsafe { NonZeroU8::new_unchecked(2) });
     pub const N3: Self = Self(unsafe { NonZeroU8::new_unchecked(3) });
@@ -475,7 +476,10 @@ impl Sudoku {
     pub fn form_diff(&self, other: &Self) -> Option<Diff> {
         let mut solved_diff = Vec::new();
         for pos in PositionBucket::all().into_iter() {
-            // SAFETY: both types have same size an align
+            // SAFETY: Due to niche value optimization on `Option<Number>` (`Number(NonZeroU8)`),
+            // `Option<Number>` has the exact same size (1 byte) and alignment (1 byte) as `u8`,
+            // where `None` is bitwise 0 and `Some(Number(n))` is `n` (1..=9).
+            // Transmuting to `u8` reads initialized bytes without violating any invariants.
             let xor = unsafe {
                 std::mem::transmute::<_, u8>(self.solved_numbers[pos])
                     ^ std::mem::transmute::<_, u8>(other.solved_numbers[pos])
@@ -515,10 +519,17 @@ impl Sudoku {
     pub fn apply_diff(&mut self, diff: DiffRef) {
         for (pos, xor) in diff.solved_diff() {
             unsafe {
-                // SAFETY since xor is from valid a ^ b and field is either a or b we get b or a
-                // respectively back and thus dont break the invariants of Option<Number>
+                // SAFETY:
+                // 1. `Option<Number>` is layout-compatible with `u8` (size 1, align 1), where 0 represents `None`
+                //    and 1..=9 represent `Some(Number)`.
+                // 2. The pointer cast `&mut self.solved_numbers[*pos] as *mut _ as *mut u8` is properly aligned and
+                //    dereferences valid, initialized memory.
+                // 3. In `form_diff()`, `xor = a ^ b` where `a` and `b` are valid representations of `Option<Number>`.
+                //    Since `self.solved_numbers[*pos]` currently holds either `a` or `b`, XORing with `xor` produces
+                //    the other valid value (`a ^ (a ^ b) = b` or `b ^ (a ^ b) = a`), strictly preserving the
+                //    discriminant and `NonZeroU8` invariant of `Option<Number>`.
                 let field: &mut u8 = &mut *(&mut self.solved_numbers[*pos] as *mut _ as *mut u8);
-                *field ^= xor
+                *field ^= xor;
             }
         }
         for (pos, xor) in diff.corner_diff() {
@@ -539,11 +550,21 @@ pub struct Diff {
 
 fn transmute_to_u8<T>(s: &[T]) -> &[u8] {
     let byte_len = std::mem::size_of::<T>() * s.len();
+    // SAFETY:
+    // 1. `s.as_ptr()` points to `s.len()` contiguous, properly initialized instances of `T`.
+    // 2. Reading them as bytes covers exactly `byte_len` initialized bytes.
+    // 3. Alignment of `u8` is 1, which is trivially satisfied by any pointer.
+    // 4. The returned lifetime is tied to `s`, upholding borrow checker guarantees.
     unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, byte_len) }
 }
 
+/// # Safety
+/// - `s.as_ptr()` must be properly aligned for `T` (`align_of::<T>()`).
+/// - `s.len()` must be an exact multiple of `size_of::<T>()`.
+/// - The bytes in `s` must represent valid bit patterns for type `T`.
 unsafe fn transmute_from_u8<T>(s: &[u8]) -> &[T] {
     let count = s.len() / std::mem::size_of::<T>();
+    // SAFETY: The caller guarantees proper alignment, size multiple, and bit validity for `T`.
     unsafe { std::slice::from_raw_parts(s.as_ptr() as *const T, count) }
 }
 
@@ -557,11 +578,20 @@ pub struct DiffRef<'a> {
 impl<'a> DiffRef<'a> {
     pub fn solved_diff(&self) -> impl Iterator<Item = &'a (GridPosition, u8)> {
         let len = self.solved_len as usize * size_of::<(GridPosition, u8)>();
+        // SAFETY:
+        // 1. Alignment: `(GridPosition, u8)` has align 1 (both fields are 1 byte), so any byte offset is aligned.
+        // 2. Length: `len` is `solved_len * 2`, an exact multiple of `size_of::<(GridPosition, u8)>()`.
+        // 3. Validity: The first `len` bytes were serialized in `DiffStack::push` from valid `(GridPosition, u8)` pairs.
         unsafe { transmute_from_u8(&self.data[..len]) }.iter()
     }
     pub fn corner_diff(&self) -> impl Iterator<Item = &'a (GridPosition, NumberBucket)> {
         let start = self.solved_len as usize * size_of::<(GridPosition, u8)>();
         let len = self.corner_len as usize * size_of::<(GridPosition, NumberBucket)>();
+        // SAFETY:
+        // 1. Alignment: In `push()`, preamble is 4 bytes and `solved_diff` occupies an even number of bytes (`solved_len * 2`).
+        //    Thus `start` is an even offset within `self.data`, satisfying the 2-byte alignment for `(GridPosition, NumberBucket)`.
+        // 2. Length: `len` is `corner_len * 4`, an exact multiple of `size_of::<(GridPosition, NumberBucket)>()`.
+        // 3. Validity: These bytes were serialized directly from valid `(GridPosition, NumberBucket)` slices in `push()`.
         unsafe { transmute_from_u8(&self.data[start..][..len]) }.iter()
     }
 
@@ -569,6 +599,11 @@ impl<'a> DiffRef<'a> {
         let start = self.solved_len as usize * size_of::<(GridPosition, u8)>()
             + self.corner_len as usize * size_of::<(GridPosition, NumberBucket)>();
         let len = self.center_len as usize * size_of::<(GridPosition, NumberBucket)>();
+        // SAFETY:
+        // 1. Alignment: Preamble (4 bytes), `solved_diff` (even bytes), and `corner_diff` (multiples of 4 bytes)
+        //    ensure `start` is an even byte offset, satisfying the 2-byte alignment for `(GridPosition, NumberBucket)`.
+        // 2. Length: `len` is `center_len * 4`, an exact multiple of `size_of::<(GridPosition, NumberBucket)>()`.
+        // 3. Validity: These bytes were serialized directly from valid `(GridPosition, NumberBucket)` slices in `push()`.
         unsafe { transmute_from_u8(&self.data[start..][..len]) }.iter()
     }
 }
@@ -588,7 +623,9 @@ impl DiffStack {
     }
 
     pub fn push(&mut self, diff: Diff) {
-        // SAFETY pointer is always less that self.stack.len()
+        // SAFETY: `self.pointer` is guaranteed to be <= `self.stack.len()` and <= `self.stack.capacity()`.
+        // The elements up to `self.pointer` are already initialized bytes.
+        // Truncating the length to `self.pointer` drops any invalidated redo history without reallocating.
         unsafe {
             self.stack.set_len(self.pointer);
         }
