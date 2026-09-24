@@ -310,6 +310,13 @@ impl Component for Solver {
             } else {
                 return (InputStatus::Unhandled, Navigation::None);
             };
+            if motion_event.action() == MotionAction::Down
+                && self.button_state.selected_num.is_some()
+            {
+                // handle input on the same number
+                self.button_state.selected_num = None;
+                draw_state_handle.redraw();
+            }
             match hit {
                 Hit::Cell(pos) => self.handle_grid_input(pos, motion_event.action()),
                 Hit::Button(button) if motion_event.action() == MotionAction::Up => match button {
@@ -334,7 +341,7 @@ impl Component for Solver {
                         info!("received generic button input")
                     }
                 },
-                Hit::Button(_) => (),
+                Hit::Button(_) => {}
                 Hit::None => match self.sel_mode {
                     SelectionMode::New | SelectionMode::WithOld => {
                         self.selection = PositionBucket::new()
@@ -369,10 +376,36 @@ impl Component for Solver {
             }
             hl
         };
+
+        let num_to_highlight = self.button_state.selected_num.or_else(|| {
+            if self.selection.count() != 1 {
+                return None;
+            }
+
+            let pos = self.selection.into_iter().next()?;
+            let cell = self.sudoku.get(pos);
+
+            cell.given_number.or(cell.solved_number).copied()
+        });
+
+        let num_highlight = if let Some(num) = num_to_highlight {
+            let mut bucket = PositionBucket::new();
+            for pos in PositionBucket::all().into_iter() {
+                let cell = self.sudoku.get(pos);
+                if cell.contains_num(num) {
+                    bucket.insert(pos);
+                }
+            }
+            bucket
+        } else {
+            PositionBucket::new()
+        };
+
         self.sudoku.render(
             canvas,
             &[
                 (Swatch::Highlight, highlight),
+                (Swatch::NumHighlight, num_highlight),
                 (Swatch::Selection, self.selection),
             ],
             &layout.grid,

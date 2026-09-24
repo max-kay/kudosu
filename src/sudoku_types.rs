@@ -427,6 +427,17 @@ pub struct SCellRef<'a> {
     pub corner_notes: &'a NumberBucket,
 }
 
+impl SCellRef<'_> {
+    pub fn contains_num(self, num: Number) -> bool {
+        if let Some(x) = self.given_number {
+            return *x == num;
+        } else if let Some(x) = self.solved_number {
+            return *x == num;
+        }
+        self.center_notes.contains(num) || self.corner_notes.contains(num)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct GridLayout {
     pub left: f32,
@@ -599,10 +610,10 @@ impl Sudoku {
             Rect::from_xywh(layout.left, layout.top, layout.size, layout.size),
             Swatch::GridBackground,
         );
-        self.draw_cells(canvas, layout);
         for (col, bucket) in marks {
             Self::highlight_cells(canvas, *col, layout, bucket);
         }
+        self.draw_cells(canvas, layout);
         Self::draw_grid(layout, canvas);
     }
 }
