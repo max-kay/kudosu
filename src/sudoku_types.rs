@@ -217,6 +217,12 @@ impl Number {
 #[derive(Clone, Copy)]
 pub struct NumberBucket(u16);
 
+impl From<Number> for NumberBucket {
+    fn from(value: Number) -> Self {
+        Self(value.as_mask())
+    }
+}
+
 impl std::fmt::Debug for NumberBucket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("NumberBucket")

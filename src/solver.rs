@@ -10,7 +10,7 @@ use tiny_skia::Stroke;
 use crate::{
     Canvas, Component, DrawState, GridPosition, Navigation, Number, NumberBucket, PositionBucket,
     Rect, SUDOKUS, Sudoku,
-    canvas::Swatch,
+    canvas::{self, Swatch},
     sudoku_types::{DiffStack, GridLayout},
 };
 
@@ -25,8 +25,8 @@ pub enum SelectionMode {
 #[derive(PartialEq, Eq)]
 enum InputMode {
     Solve,
-    Center,
     Corner,
+    Center,
     Color,
 }
 
@@ -41,24 +41,13 @@ impl ButtonState {
     pub fn is_active(&self, button: Button) -> bool {
         match button {
             Button::Undo | Button::Redo | Button::Delete => false,
-            Button::Number(num) => {
-                if let Some(n) = self.selected_num
-                    && n == num
-                {
-                    true
-                } else {
-                    false
-                }
-            }
             Button::SelectionMode => self.add_on_new_selection,
             Button::Solve => self.input_mode == InputMode::Solve,
             Button::Center => self.input_mode == InputMode::Center,
             Button::Corner => self.input_mode == InputMode::Corner,
             Button::Color => self.input_mode == InputMode::Color,
-            // TODO generic button
-            Button::Generic1 => false,
-            Button::Generic2 => false,
-            Button::Generic3 => false,
+            Button::Number(_) => false,  // handled in draw_num_button
+            Button::Generic(_) => false, // handled in draw_generic_button
         }
     }
 
@@ -67,6 +56,99 @@ impl ButtonState {
             SelectionMode::WithOld
         } else {
             SelectionMode::New
+        }
+    }
+
+    pub fn handle_generic_input(&mut self, num: u8) {
+        match self.input_mode {
+            InputMode::Solve => match num {
+                1 => self.secondary_input = InputMode::Solve,
+                2 => self.secondary_input = InputMode::Corner,
+                3 => self.secondary_input = InputMode::Center,
+                _ => unreachable!(),
+            },
+            InputMode::Color => todo!(),
+            InputMode::Corner | InputMode::Center => (),
+        }
+    }
+}
+
+const COLOR_BUTTON_SHRINK: f32 = 0.2;
+
+impl ButtonState {
+    fn get_color_pair(is_active: bool) -> (Swatch, Swatch) {
+        if is_active {
+            (
+                Swatch::ButtonBackgroundActive,
+                Swatch::ButtonForegroundActive,
+            )
+        } else {
+            (Swatch::ButtonBackground, Swatch::ButtonForeground)
+        }
+    }
+
+    pub fn draw_generic_button(&self, num: u8, rect: Rect, canvas: &mut Canvas<'_>) {
+        match self.input_mode {
+            InputMode::Solve => {
+                let is_active = match self.secondary_input {
+                    InputMode::Solve => num == 1,
+                    InputMode::Corner => num == 2,
+                    InputMode::Center => num == 3,
+                    InputMode::Color => unreachable!(),
+                };
+                let (background, foreground) = Self::get_color_pair(is_active);
+                match num {
+                    1 => {
+                        canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                        canvas.draw_num(Number::new(1), rect, foreground);
+                    }
+                    2 => {
+                        canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                        canvas.draw_corner_notes(rect, NumberBucket::example(), foreground);
+                    }
+                    3 => {
+                        canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                        canvas.draw_center_notes(rect, NumberBucket::example(), foreground);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            InputMode::Color => {
+                canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, Swatch::ButtonBackground)
+            }
+            InputMode::Center | InputMode::Corner => {} // Generic buttons have no function in this
+                                                        // state
+        }
+    }
+
+    pub fn draw_num_button(&self, num: Number, rect: Rect, canvas: &mut Canvas<'_>) {
+        let is_active = if let Some(n) = self.selected_num {
+            n == num
+        } else {
+            false
+        };
+
+        let (background, foreground) = Self::get_color_pair(is_active);
+        match self.input_mode {
+            InputMode::Solve => {
+                canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                canvas.draw_num(num, rect, foreground);
+            }
+            InputMode::Center => {
+                canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                canvas.draw_center_notes(rect, num.into(), foreground);
+            }
+            InputMode::Corner => {
+                canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                canvas.draw_corner_notes(rect, num.into(), foreground);
+            }
+            InputMode::Color => {
+                canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, Swatch::ButtonBackground);
+                canvas.fill_rect(
+                    rect.shrink(rect.width() * COLOR_BUTTON_SHRINK),
+                    Swatch::WrongNumber,
+                );
+            }
         }
     }
 }
@@ -286,35 +368,26 @@ impl Solver {
         };
         for (rect, button) in layout.get_button_rects() {
             let is_active = self.button_state.is_active(button);
-            let (background, foreground) = if is_active {
-                (
-                    Swatch::ButtonBackgroundActive,
-                    Swatch::ButtonForegroundActive,
-                )
-            } else {
-                (Swatch::ButtonBackground, Swatch::ButtonForeground)
-            };
+            let (background, foreground) = ButtonState::get_color_pair(is_active);
 
             let symb_rect = rect.shrink(rect.width().min(rect.height()) * BUTTON_SYMB_MARGIN);
 
             match button {
-                Button::Number(num) => {
-                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
-                    canvas.draw_num(num, rect, foreground);
-                }
                 Button::Undo => {
-                    if self.undo_stack.can_undo() {
-                        canvas.draw_char_centered('←', symb_rect, Swatch::UiColor)
+                    let color = if self.undo_stack.can_undo() {
+                        Swatch::UiColor
                     } else {
-                        canvas.draw_char_centered('←', symb_rect, Swatch::UiColorInActive)
-                    }
+                        Swatch::UiColorInActive
+                    };
+                    canvas.draw_char_centered('←', symb_rect, color)
                 }
                 Button::Redo => {
-                    if self.undo_stack.can_redo() {
-                        canvas.draw_char_centered('→', symb_rect, Swatch::UiColor)
+                    let color = if self.undo_stack.can_redo() {
+                        Swatch::UiColor
                     } else {
-                        canvas.draw_char_centered('→', symb_rect, Swatch::UiColorInActive)
-                    }
+                        Swatch::UiColorInActive
+                    };
+                    canvas.draw_char_centered('→', symb_rect, color)
                 }
                 Button::SelectionMode => {
                     canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
@@ -342,8 +415,13 @@ impl Solver {
                     canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
                     canvas.draw_char_centered('✎', symb_rect, foreground);
                 }
-                Button::Generic1 | Button::Generic2 | Button::Generic3 => {
-                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+
+                // These buttons are drawn depending on input mode
+                Button::Generic(num) => {
+                    self.button_state.draw_generic_button(num, rect, canvas);
+                }
+                Button::Number(num) => {
+                    self.button_state.draw_num_button(num, rect, canvas);
                 }
             }
         }
@@ -448,8 +526,8 @@ impl Component for Solver {
                 Button::Corner => self.button_state.input_mode = InputMode::Corner,
                 Button::Color => self.button_state.input_mode = InputMode::Color,
 
-                Button::Generic1 | Button::Generic2 | Button::Generic3 => {
-                    info!("received generic button input")
+                Button::Generic(num) => {
+                    self.button_state.handle_generic_input(num);
                 }
             },
             Hit::Button(_) => {}
@@ -570,9 +648,9 @@ impl ButtonLayout {
         Button::Number(Number::N9), // (3, 2)
         Button::Center,             // (4, 2)
         Button::Delete,             // (0, 3)
-        Button::Generic1,           // (1, 3)
-        Button::Generic2,           // (2, 3)
-        Button::Generic3,           // (3, 3)
+        Button::Generic(1),         // (1, 3)
+        Button::Generic(2),         // (2, 3)
+        Button::Generic(3),         // (3, 3)
         Button::Color,              // (4, 3)
     ];
 
@@ -774,9 +852,7 @@ pub enum Button {
     Center,
     Corner,
     Color,
-    Generic1,
-    Generic2,
-    Generic3,
+    Generic(u8),
 }
 
 enum Menu {
