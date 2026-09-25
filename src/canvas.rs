@@ -89,6 +89,12 @@ impl Into<tiny_skia::Rect> for Rect {
     }
 }
 
+impl From<tiny_skia::Rect> for Rect {
+    fn from(value: tiny_skia::Rect) -> Self {
+        Self::from_ltrb(value.left(), value.top(), value.right(), value.bottom())
+    }
+}
+
 impl Rect {
     pub fn from_ltrb(left: f32, top: f32, right: f32, bottom: f32) -> Self {
         Self {
@@ -105,6 +111,15 @@ impl Rect {
             top: y,
             right: x + width,
             bottom: y + height,
+        }
+    }
+
+    pub fn square_from_center_side(c_x: f32, c_y: f32, side: f32) -> Self {
+        Self {
+            left: c_x - side / 2.0,
+            top: c_y - side / 2.0,
+            right: c_x + side / 2.0,
+            bottom: c_y + side / 2.0,
         }
     }
 
@@ -130,6 +145,13 @@ impl Rect {
 
     pub fn height(&self) -> f32 {
         self.bottom - self.top
+    }
+
+    pub fn center(&self) -> (f32, f32) {
+        (
+            (self.left + self.right) / 2.0,
+            (self.top + self.bottom) / 2.0,
+        )
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
@@ -199,7 +221,7 @@ pub struct FaceBook(pub Vec<(String, Face<'static>)>);
 type GlyphId = (usize, ttf_parser::GlyphId);
 
 impl FaceBook {
-    pub fn glyph_index(&self, c: char) -> Option<GlyphId> {
+    fn glyph_index(&self, c: char) -> Option<GlyphId> {
         for (i, (_name, face)) in self.0.iter().enumerate() {
             if let Some(id) = face.glyph_index(c) {
                 return Some((i, id));
@@ -208,7 +230,7 @@ impl FaceBook {
         None
     }
 
-    pub fn outline_glyph(&self, id: GlyphId, builder: &mut SkiaOutlineBuilder) {
+    fn outline_glyph(&self, id: GlyphId, builder: &mut SkiaOutlineBuilder) {
         self.0[id.0].1.outline_glyph(id.1, builder);
     }
 
@@ -266,6 +288,23 @@ impl Canvas<'_> {
             &path,
             &self.palette.0[color].into_paint(),
             &stroke,
+            Transform::identity(),
+            None,
+        );
+    }
+
+    pub fn outline_rect_rounded(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        color: Swatch,
+        stroke: &Stroke,
+    ) {
+        let path = rect.make_rounded_path(radius);
+        self.pixmap.stroke_path(
+            &path,
+            &self.palette.0[color].into_paint(),
+            stroke,
             Transform::identity(),
             None,
         );
@@ -360,11 +399,7 @@ impl Canvas<'_> {
     }
 
     pub fn draw_num(&mut self, num: Number, rect: Rect, color: Swatch) {
-        self.draw_char(num.as_char(), rect, color);
-    }
-
-    pub fn draw_char(&mut self, c: char, rect: Rect, color: Swatch) {
-        let l = self.make_char_path(c);
+        let l = self.make_char_path(num.as_char());
         let center_y = rect.top() + rect.height() / 2.0;
         let center_x = rect.left() + rect.width() / 2.0;
         let font_height = rect.height() * (1.0 - 2.0 * CELL_MARGIN);
@@ -375,6 +410,28 @@ impl Canvas<'_> {
         let transform = Transform::from_scale(scale, -scale).post_translate(
             center_x - font_center_x * scale,
             center_y + font_center_y * scale,
+        );
+        self.pixmap.fill_path(
+            &l.path,
+            &self.palette.0[color].into_paint(),
+            FillRule::Winding,
+            transform,
+            None,
+        );
+    }
+
+    pub fn draw_char_centered(&mut self, c: char, rect: Rect, color: Swatch) {
+        let l = self.make_char_path(c);
+        let center_y = rect.top() + rect.height() / 2.0;
+        let center_x = rect.left() + rect.width() / 2.0;
+
+        let bounds: Rect = l.path.bounds().into();
+        let (sym_center_x, sym_center_y) = bounds.center();
+        let scale = (rect.width() / bounds.width()).min(rect.height() / bounds.height());
+
+        let transform = Transform::from_scale(scale, -scale).post_translate(
+            center_x - sym_center_x * scale,
+            center_y + sym_center_y * scale,
         );
         self.pixmap.fill_path(
             &l.path,

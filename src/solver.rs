@@ -5,6 +5,7 @@ use android_activity::{
     input::{InputEvent, MotionAction},
 };
 use log::{info, warn};
+use tiny_skia::Stroke;
 
 use crate::{
     Canvas, Component, DrawState, GridPosition, Navigation, Number, NumberBucket, PositionBucket,
@@ -83,6 +84,7 @@ impl Default for ButtonState {
 
 pub struct Solver {
     sudoku: Box<Sudoku>,
+    index: usize,
     sel_mode: SelectionMode,
     selection: PositionBucket,
     button_state: ButtonState,
@@ -98,6 +100,7 @@ impl Solver {
                 FromStr::from_str(SUDOKUS[i].0).unwrap(),
                 FromStr::from_str(SUDOKUS[i].1).unwrap(),
             )),
+            index: i,
             sel_mode: SelectionMode::New,
             selection: PositionBucket::new(),
             button_state: Default::default(),
@@ -270,6 +273,10 @@ impl Solver {
     }
 }
 
+const BUTTON_SYMB_MARGIN: f32 = 0.1;
+const MENU_MARGIN: f32 = 0.15;
+const CORNER_RAD: f32 = 1.0 / 20.0;
+
 impl Solver {
     pub fn draw_buttons(&self, canvas: &mut Canvas<'_>) {
         let layout = if let Some(l) = self.layout.as_ref() {
@@ -288,56 +295,111 @@ impl Solver {
                 (Swatch::ButtonBackground, Swatch::ButtonForeground)
             };
 
+            let symb_rect = rect.shrink(rect.width().min(rect.height()) * BUTTON_SYMB_MARGIN);
+
             match button {
                 Button::Number(num) => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
                     canvas.draw_num(num, rect, foreground);
                 }
                 Button::Undo => {
                     if self.undo_stack.can_undo() {
-                        canvas.draw_char('←', rect, Swatch::UiColor)
+                        canvas.draw_char_centered('←', symb_rect, Swatch::UiColor)
                     } else {
-                        canvas.draw_char('←', rect, Swatch::UiColorInActive)
+                        canvas.draw_char_centered('←', symb_rect, Swatch::UiColorInActive)
                     }
                 }
                 Button::Redo => {
                     if self.undo_stack.can_redo() {
-                        canvas.draw_char('→', rect, Swatch::UiColor)
+                        canvas.draw_char_centered('→', symb_rect, Swatch::UiColor)
                     } else {
-                        canvas.draw_char('→', rect, Swatch::UiColorInActive)
+                        canvas.draw_char_centered('→', symb_rect, Swatch::UiColorInActive)
                     }
                 }
                 Button::SelectionMode => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
-                    canvas.draw_char('▚', rect, foreground);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                    canvas.draw_char_centered('▚', symb_rect, foreground);
                 }
                 Button::Delete => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
-                    canvas.draw_char('⌫', rect, foreground);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                    canvas.draw_char_centered('⌫', symb_rect, foreground);
                 }
                 Button::Solve => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
                     canvas.draw_num(Number::N1, rect, foreground);
                 }
                 Button::Center => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
                     let bucket = NumberBucket::example();
                     canvas.draw_center_notes(rect, bucket, foreground);
                 }
                 Button::Corner => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
                     let bucket = NumberBucket::example();
                     canvas.draw_corner_notes(rect, bucket, foreground);
                 }
                 Button::Color => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
-                    canvas.draw_char('✎', rect, foreground);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
+                    canvas.draw_char_centered('✎', symb_rect, foreground);
                 }
                 Button::Generic1 | Button::Generic2 | Button::Generic3 => {
-                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.fill_rect_rounded(rect, rect.width() * CORNER_RAD, background);
                 }
             }
         }
+    }
+
+    fn draw_menu(&self, canvas: &mut Canvas<'_>) {
+        let layout = if let Some(l) = self.layout.as_ref() {
+            l
+        } else {
+            unreachable!()
+        };
+
+        canvas.outline_rect_rounded(
+            layout.menu.pause,
+            layout.menu.pause.width() * CORNER_RAD,
+            Swatch::UiColor,
+            &Stroke::default(),
+        );
+        canvas.draw_char_centered(
+            '⏸',
+            layout
+                .menu
+                .pause
+                .shrink(layout.menu.pause.width() * BUTTON_SYMB_MARGIN),
+            Swatch::UiColor,
+        );
+
+        canvas.outline_rect_rounded(
+            layout.menu.settings,
+            layout.menu.settings.width() * CORNER_RAD,
+            Swatch::UiColor,
+            &Stroke::default(),
+        );
+        canvas.draw_char_centered(
+            '⛭',
+            layout
+                .menu
+                .settings
+                .shrink(layout.menu.pause.width() * BUTTON_SYMB_MARGIN),
+            Swatch::UiColor,
+        );
+
+        canvas.outline_rect_rounded(
+            layout.menu.hint,
+            layout.menu.hint.width() * CORNER_RAD,
+            Swatch::UiColor,
+            &Stroke::default(),
+        );
+        canvas.draw_char_centered(
+            '?',
+            layout
+                .menu
+                .hint
+                .shrink(layout.menu.pause.width() * BUTTON_SYMB_MARGIN),
+            Swatch::UiColor,
+        );
     }
 }
 
@@ -391,6 +453,12 @@ impl Component for Solver {
                 }
             },
             Hit::Button(_) => {}
+            Hit::Menu(menu) if motion_event.action() == MotionAction::Up => match menu {
+                Menu::Pause => return (InputStatus::Handled, Navigation::ToSelection(self.index)),
+                Menu::Settings => (),
+                Menu::Hint => (),
+            },
+            Hit::Menu(_) => {}
             Hit::None => match self.sel_mode {
                 SelectionMode::New | SelectionMode::WithOld => {
                     self.selection = PositionBucket::new()
@@ -466,6 +534,7 @@ impl Component for Solver {
         );
 
         self.draw_buttons(canvas);
+        self.draw_menu(canvas);
     }
 
     fn relayout(&mut self, bounds: Rect) {
@@ -542,16 +611,33 @@ impl ButtonLayout {
     }
 }
 
+#[derive(Clone, Copy)]
 struct MenuLayout {
     pause: Rect,
     settings: Rect,
     hint: Rect,
 }
 
+impl MenuLayout {
+    fn hit(&self, x: f32, y: f32) -> Option<Menu> {
+        if self.pause.contains(x, y) {
+            return Some(Menu::Pause);
+        }
+        if self.settings.contains(x, y) {
+            return Some(Menu::Settings);
+        }
+        if self.hint.contains(x, y) {
+            return Some(Menu::Hint);
+        }
+        return None;
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Layout {
     grid: GridLayout,
     button: ButtonLayout,
+    menu: MenuLayout,
 }
 
 impl Layout {
@@ -559,23 +645,55 @@ impl Layout {
         let margin = window.width() * MARGIN_FACTOR;
         let size = window.width() - 2.0 * margin;
         let ui_button_size = size / (ButtonLayout::N_COLS as f32 + 1.0);
-        let button_area = Rect::from_ltrb(
-            margin + ui_button_size,
-            window.bottom() - ButtonLayout::N_ROWS as f32 * ui_button_size - margin,
-            window.right() - margin,
-            window.bottom() - margin,
-        );
+
+        let menu_top = window.bottom() - ButtonLayout::N_ROWS as f32 * ui_button_size - margin;
+        let menu_bottom = window.bottom() - margin;
+        let menu_left = window.left() + margin;
+        let menu_right = menu_left + ui_button_size;
+
+        let button_area =
+            Rect::from_ltrb(menu_right, menu_top, window.right() - margin, menu_bottom);
         let button_margin = ui_button_size / 20.0;
+
         let grid = GridLayout {
             left: window.left() + margin,
             top: button_area.top() - margin - size,
-            size: size,
+            size,
         };
+
+        // Corrected Menu Calculations
+        let menu_width = menu_right - menu_left;
+        let menu_height = menu_bottom - menu_top;
+        let menu_size = menu_width.min(menu_height / 3.0);
+
+        let menu_center_x = (menu_left + menu_right) / 2.0;
+        // Base center Y for the top menu item (pause)
+        let start_y = menu_top + menu_size / 2.0;
+        let menu_shrink = menu_size * MENU_MARGIN;
+
         Self {
             grid,
             button: ButtonLayout {
                 all: button_area,
                 margin: button_margin,
+            },
+            menu: MenuLayout {
+                pause: Rect::square_from_center_side(menu_center_x, start_y, menu_size)
+                    .shrink(menu_shrink),
+
+                settings: Rect::square_from_center_side(
+                    menu_center_x,
+                    start_y + menu_size,
+                    menu_size,
+                )
+                .shrink(menu_shrink),
+
+                hint: Rect::square_from_center_side(
+                    menu_center_x,
+                    start_y + 2.0 * menu_size,
+                    menu_size,
+                )
+                .shrink(menu_shrink),
             },
         }
     }
@@ -585,23 +703,53 @@ impl Layout {
         let grid_size = window.height() - 2.0 * margin;
         let ui_button_size =
             (window.width() - 4.0 * margin - grid_size) / (ButtonLayout::N_COLS as f32 + 1.0);
-        let button_area = Rect::from_ltrb(
-            window.left() + 2.0 * margin + grid_size + ui_button_size,
-            window.bottom() - margin - ui_button_size * ButtonLayout::N_ROWS as f32,
-            window.right() - margin,
-            window.bottom() - margin,
-        );
+
+        let menu_left = window.left() + 2.0 * margin + grid_size;
+        let menu_right = menu_left + ui_button_size;
+        let menu_top = window.bottom() - margin - ui_button_size * ButtonLayout::N_ROWS as f32;
+        let menu_bottom = window.bottom() - margin;
+
+        let button_area =
+            Rect::from_ltrb(menu_right, menu_top, window.right() - margin, menu_bottom);
         let button_margin = ui_button_size / 20.0;
+
         let grid = GridLayout {
             left: window.left() + margin,
             top: window.top() + margin,
             size: grid_size,
         };
+
+        let menu_width = menu_right - menu_left;
+        let menu_height = menu_bottom - menu_top;
+        let menu_size = menu_width.min(menu_height / 3.0);
+
+        let menu_center_x = (menu_left + menu_right) / 2.0;
+        let start_y = menu_top + menu_size / 2.0;
+        let menu_shrink = menu_size * MENU_MARGIN;
+
         Self {
             grid,
             button: ButtonLayout {
                 all: button_area,
                 margin: button_margin,
+            },
+            menu: MenuLayout {
+                pause: Rect::square_from_center_side(menu_center_x, start_y, menu_size)
+                    .shrink(menu_shrink),
+
+                settings: Rect::square_from_center_side(
+                    menu_center_x,
+                    start_y + menu_size,
+                    menu_size,
+                )
+                .shrink(menu_shrink),
+
+                hint: Rect::square_from_center_side(
+                    menu_center_x,
+                    start_y + 2.0 * menu_size,
+                    menu_size,
+                )
+                .shrink(menu_shrink),
             },
         }
     }
@@ -631,19 +779,29 @@ pub enum Button {
     Generic3,
 }
 
-pub enum Hit {
+enum Menu {
+    Pause,
+    Settings,
+    Hint,
+}
+
+enum Hit {
     Cell(GridPosition),
     Button(Button),
+    Menu(Menu),
     None,
 }
 
 impl Layout {
-    pub fn hit(&self, x: f32, y: f32) -> Hit {
+    fn hit(&self, x: f32, y: f32) -> Hit {
         if let Some(pos) = self.grid.hit(x, y) {
             return Hit::Cell(pos);
         }
         if let Some(but) = self.button.hit(x, y) {
             return Hit::Button(but);
+        }
+        if let Some(men) = self.menu.hit(x, y) {
+            return Hit::Menu(men);
         }
         return Hit::None;
     }

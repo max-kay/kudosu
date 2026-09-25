@@ -441,6 +441,22 @@ impl Sudoku {
             corner_notes: &mut self.corner_notes[pos],
         }
     }
+
+    pub fn is_solved(&self) -> bool {
+        for cell in self.iter_cells(PositionBucket::all()) {
+            if cell.given_number.is_some() {
+                continue;
+            }
+            if let Some(num) = cell.solved_number {
+                if num != cell.solution {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
 }
 
 pub struct SCellMut<'a> {
