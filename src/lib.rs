@@ -8,7 +8,6 @@ use android_activity::{
     ndk::{hardware_buffer_format::HardwareBufferFormat, native_window::NativeWindow},
 };
 use log::{LevelFilter, info, warn};
-use ttf_parser::Face;
 
 mod canvas;
 mod insets;
@@ -196,11 +195,9 @@ impl MyApp {
                 }
             }
             MainEvent::Destroy => {
-                info!("App shutting down");
                 self.running = false;
             }
             MainEvent::ContentRectChanged { .. } => {
-                info!("ContentRectChanged");
                 self.draw_state.relayout();
             }
             MainEvent::GainedFocus => {
@@ -210,7 +207,7 @@ impl MyApp {
                 info!("LostFocus");
             }
             MainEvent::ConfigChanged { .. } => {
-                info!("ConfigChanged");
+                self.draw_state.relayout();
             }
             MainEvent::LowMemory => warn!("running low on memory"),
             MainEvent::Start => info!("Start"),
@@ -249,8 +246,6 @@ impl MyApp {
                 }
             }
             self.draw_state.clear();
-        } else {
-            warn!("expected to have window but had none")
         }
     }
 
@@ -345,8 +340,6 @@ const SUDOKUS: &[(&str, &str)] = &[
     ),
 ];
 
-// SAFETY: `android_main` is the standard entrypoint symbol required by `android_activity`.
-// Disabling name mangling is required for the OS loader/activity glue to locate and invoke it.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     // sudoku_types::test::number_bucket();
@@ -382,7 +375,6 @@ fn android_main(app: AndroidApp) {
         get_bytes("font/Noto_Sans_JP/static/NotoSansJP-Regular.ttf"),
     ];
 
-    info!("Kudosu Started!");
     let mut state = MyApp::new(app.clone(), FaceBook(faces));
 
     while state.running() {

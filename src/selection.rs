@@ -7,8 +7,7 @@ use log::warn;
 use crate::SUDOKUS;
 use crate::canvas::Swatch;
 use crate::{
-    Component, DrawState, Navigation, PositionBucket, Rect, Sudoku, canvas::Canvas,
-    sudoku_types::GridLayout,
+    Component, DrawState, Navigation, Rect, Sudoku, canvas::Canvas, sudoku_types::GridLayout,
 };
 
 pub struct SelectionScreen {

@@ -10,7 +10,7 @@ use tiny_skia::Stroke;
 use crate::{
     Canvas, Component, DrawState, GridPosition, Navigation, Number, NumberBucket, PositionBucket,
     Rect, SUDOKUS, Sudoku,
-    canvas::{self, Swatch},
+    canvas::Swatch,
     sudoku_types::{DiffStack, GridLayout},
 };
 
@@ -35,6 +35,8 @@ struct ButtonState {
     input_mode: InputMode,
     secondary_input: InputMode,
     selected_num: Option<Number>,
+    started_on: Option<Hit>,
+    active_hover: bool,
 }
 
 impl ButtonState {
@@ -67,7 +69,7 @@ impl ButtonState {
                 3 => self.secondary_input = InputMode::Center,
                 _ => unreachable!(),
             },
-            InputMode::Color => todo!(),
+            InputMode::Color => (),
             InputMode::Corner | InputMode::Center => (),
         }
     }
@@ -90,12 +92,19 @@ impl ButtonState {
     pub fn draw_generic_button(&self, num: u8, rect: Rect, canvas: &mut Canvas<'_>) {
         match self.input_mode {
             InputMode::Solve => {
-                let is_active = match self.secondary_input {
+                let mut is_active = match self.secondary_input {
                     InputMode::Solve => num == 1,
                     InputMode::Corner => num == 2,
                     InputMode::Center => num == 3,
                     InputMode::Color => unreachable!(),
                 };
+
+                match self.started_on {
+                    Some(Hit::Button(Button::Generic(n))) if n == num && self.active_hover => {
+                        is_active = !is_active
+                    }
+                    _ => (),
+                }
                 let (background, foreground) = Self::get_color_pair(is_active);
                 match num {
                     1 => {
@@ -122,12 +131,18 @@ impl ButtonState {
     }
 
     pub fn draw_num_button(&self, num: Number, rect: Rect, canvas: &mut Canvas<'_>) {
-        let is_active = if let Some(n) = self.selected_num {
+        let mut is_active = if let Some(n) = self.selected_num {
             n == num
         } else {
             false
         };
 
+        match self.started_on {
+            Some(Hit::Button(Button::Number(n))) if n == num && self.active_hover => {
+                is_active = !is_active
+            }
+            _ => (),
+        }
         let (background, foreground) = Self::get_color_pair(is_active);
         match self.input_mode {
             InputMode::Solve => {
@@ -160,6 +175,8 @@ impl Default for ButtonState {
             input_mode: InputMode::Solve,
             secondary_input: InputMode::Center,
             selected_num: None,
+            started_on: None,
+            active_hover: false,
         }
     }
 }
@@ -294,12 +311,16 @@ impl Solver {
             .iter_cells(self.selection)
             .fold(NumberBucket::all(), |acc, c| acc & *c.corner_notes);
         if every_corner.contains(num) {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).corner_notes.remove(num);
+            for cell in self.sudoku.iter_cells_mut(self.selection) {
+                if cell.solved_number.is_none() && cell.given_number.is_none() {
+                    cell.corner_notes.remove(num);
+                }
             }
         } else {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).corner_notes.insert(num);
+            for cell in self.sudoku.iter_cells_mut(self.selection) {
+                if cell.solved_number.is_none() && cell.given_number.is_none() {
+                    cell.corner_notes.insert(num);
+                }
             }
         }
     }
@@ -310,13 +331,32 @@ impl Solver {
             .iter_cells(self.selection)
             .fold(NumberBucket::all(), |acc, c| acc & *c.center_notes);
         if every_center.contains(num) {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).center_notes.remove(num);
+            for cell in self.sudoku.iter_cells_mut(self.selection) {
+                if cell.solved_number.is_none() && cell.given_number.is_none() {
+                    cell.center_notes.remove(num);
+                }
             }
         } else {
-            for pos in self.selection.into_iter() {
-                self.sudoku.get_mut(pos).center_notes.insert(num);
+            for cell in self.sudoku.iter_cells_mut(self.selection) {
+                if cell.solved_number.is_none() && cell.given_number.is_none() {
+                    cell.center_notes.insert(num);
+                }
             }
+        }
+    }
+
+    fn handle_number_input_solve(&mut self, num: Number) {
+        let mut affected = PositionBucket::new();
+        for pos in self.selection.into_iter() {
+            let cell = self.sudoku.get_mut(pos);
+            if cell.given_number.is_none() {
+                *cell.solved_number = Some(num);
+                affected = affected | pos.sees_by_sudoku();
+            }
+        }
+        for cell in self.sudoku.iter_cells_mut(affected) {
+            cell.corner_notes.remove(num);
+            cell.center_notes.remove(num);
         }
     }
 
@@ -332,17 +372,13 @@ impl Solver {
         match self.button_state.input_mode {
             InputMode::Solve => {
                 if self.selection.count() == 1 {
-                    let pos = self.selection.into_iter().next().expect("checked above");
-                    *self.sudoku.get_mut(pos).solved_number = Some(num)
+                    self.handle_number_input_solve(num);
                 } else {
                     match self.button_state.secondary_input {
-                        InputMode::Solve => self
-                            .sudoku
-                            .iter_cells_mut(self.selection)
-                            .for_each(|c| *c.solved_number = Some(num)),
+                        InputMode::Solve => self.handle_number_input_solve(num),
                         InputMode::Center => self.handle_number_input_center(num),
                         InputMode::Corner => self.handle_number_input_corner(num),
-                        InputMode::Color => warn!("this input state is invalid"),
+                        InputMode::Color => unreachable!(),
                     }
                 }
             }
@@ -367,7 +403,13 @@ impl Solver {
             unreachable!()
         };
         for (rect, button) in layout.get_button_rects() {
-            let is_active = self.button_state.is_active(button);
+            let mut is_active = self.button_state.is_active(button);
+            match self.button_state.started_on {
+                Some(Hit::Button(b)) if b == button && self.button_state.active_hover => {
+                    is_active = !is_active
+                }
+                _ => (),
+            }
             let (background, foreground) = ButtonState::get_color_pair(is_active);
 
             let symb_rect = rect.shrink(rect.width().min(rect.height()) * BUTTON_SYMB_MARGIN);
@@ -501,41 +543,86 @@ impl Component for Solver {
         } else {
             return (InputStatus::Unhandled, Navigation::None);
         };
-        if motion_event.action() == MotionAction::Down && self.button_state.selected_num.is_some() {
-            // handle input on the same number
-            self.button_state.selected_num = None;
-            draw_state_handle.redraw();
+        match motion_event.action() {
+            MotionAction::Down => {
+                debug_assert!(self.button_state.started_on.is_none());
+                self.button_state.started_on = Some(hit);
+                self.button_state.active_hover = true;
+            }
+            MotionAction::Move | MotionAction::Up => {
+                if let Some(h) = self.button_state.started_on {
+                    if h != hit {
+                        self.button_state.active_hover = false;
+                    } else {
+                        self.button_state.active_hover = true;
+                    }
+                } else {
+                    warn!("had no start button")
+                }
+            }
+            _ => (),
         }
         match hit {
-            Hit::Cell(pos) => self.handle_grid_input(pos, motion_event.action()),
-            Hit::Button(button) if motion_event.action() == MotionAction::Up => match button {
-                Button::Number(num) => self.handle_number_input(num),
-
-                Button::Undo => self.undo(),
-                Button::Redo => self.redo(),
-
-                Button::SelectionMode => {
-                    self.button_state.add_on_new_selection =
-                        !self.button_state.add_on_new_selection;
-                    self.sel_mode = self.button_state.get_sel_mode();
+            Hit::Cell(pos) => {
+                if matches!(
+                    self.button_state.started_on,
+                    None | Some(Hit::Cell(_)) | Some(Hit::None)
+                ) {
+                    self.handle_grid_input(pos, motion_event.action())
                 }
-                Button::Delete => self.handle_delete(),
-
-                Button::Solve => self.button_state.input_mode = InputMode::Solve,
-                Button::Center => self.button_state.input_mode = InputMode::Center,
-                Button::Corner => self.button_state.input_mode = InputMode::Corner,
-                Button::Color => self.button_state.input_mode = InputMode::Color,
-
-                Button::Generic(num) => {
-                    self.button_state.handle_generic_input(num);
+            }
+            Hit::Button(button) if motion_event.action() == MotionAction::Up => {
+                if self.button_state.started_on.is_none() {
+                    return (InputStatus::Handled, Navigation::None);
                 }
-            },
+                if let Some(h) = self.button_state.started_on
+                    && h != hit
+                {
+                    self.button_state.started_on = None;
+                    return (InputStatus::Handled, Navigation::None);
+                }
+                match button {
+                    Button::Number(num) => self.handle_number_input(num),
+
+                    Button::Undo => self.undo(),
+                    Button::Redo => self.redo(),
+
+                    Button::SelectionMode => {
+                        self.button_state.add_on_new_selection =
+                            !self.button_state.add_on_new_selection;
+                        self.sel_mode = self.button_state.get_sel_mode();
+                    }
+                    Button::Delete => self.handle_delete(),
+
+                    Button::Solve => self.button_state.input_mode = InputMode::Solve,
+                    Button::Center => self.button_state.input_mode = InputMode::Center,
+                    Button::Corner => self.button_state.input_mode = InputMode::Corner,
+                    Button::Color => self.button_state.input_mode = InputMode::Color,
+
+                    Button::Generic(num) => {
+                        self.button_state.handle_generic_input(num);
+                    }
+                }
+            }
             Hit::Button(_) => {}
-            Hit::Menu(menu) if motion_event.action() == MotionAction::Up => match menu {
-                Menu::Pause => return (InputStatus::Handled, Navigation::ToSelection(self.index)),
-                Menu::Settings => (),
-                Menu::Hint => (),
-            },
+            Hit::Menu(menu) if motion_event.action() == MotionAction::Up => {
+                if self.button_state.started_on.is_none() {
+                    return (InputStatus::Handled, Navigation::None);
+                }
+                if let Some(h) = self.button_state.started_on
+                    && h != hit
+                {
+                    self.button_state.started_on = None;
+                    return (InputStatus::Handled, Navigation::None);
+                }
+                match menu {
+                    Menu::Pause => {
+                        return (InputStatus::Handled, Navigation::ToSelection(self.index));
+                    }
+                    Menu::Settings => (),
+                    Menu::Hint => (),
+                }
+            }
             Hit::Menu(_) => {}
             Hit::None => match self.sel_mode {
                 SelectionMode::New | SelectionMode::WithOld => {
@@ -543,6 +630,9 @@ impl Component for Solver {
                 }
                 SelectionMode::Add | SelectionMode::Clear => (),
             },
+        }
+        if motion_event.action() == MotionAction::Up && self.button_state.started_on.is_some() {
+            self.button_state.started_on = None;
         }
         draw_state_handle.redraw();
 
@@ -657,10 +747,10 @@ impl ButtonLayout {
     pub fn hit(&self, x: f32, y: f32) -> Option<Button> {
         let norm_x = ((x - self.all.left()) / self.all.width() * Self::N_COLS as f32).floor();
         let norm_y = ((y - self.all.top()) / self.all.height() * Self::N_ROWS as f32).floor();
-        if !(0.0 <= norm_x && norm_x <= Self::N_COLS as f32) {
+        if !(0.0 <= norm_x && norm_x < Self::N_COLS as f32) {
             return None;
         }
-        if !(0.0 <= norm_y && norm_y <= Self::N_ROWS as f32) {
+        if !(0.0 <= norm_y && norm_y < Self::N_ROWS as f32) {
             return None;
         }
         Some(Self::BUTTONS[norm_x as usize + norm_y as usize * Self::N_COLS])
@@ -841,7 +931,7 @@ impl Layout {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Button {
     Number(Number),
     Undo,
@@ -855,12 +945,14 @@ pub enum Button {
     Generic(u8),
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum Menu {
     Pause,
     Settings,
     Hint,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum Hit {
     Cell(GridPosition),
     Button(Button),
