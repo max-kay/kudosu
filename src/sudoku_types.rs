@@ -196,7 +196,7 @@ impl Number {
         }
     }
 
-    fn as_u8(&self) -> u8 {
+    pub fn as_u8(&self) -> u8 {
         self.0.into()
     }
 }

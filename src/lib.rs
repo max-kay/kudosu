@@ -126,17 +126,16 @@ impl AppState {
     }
 }
 
-pub struct MyApp {
+pub struct MyApp<'a> {
     state: AppState,
     running: bool,
-    app: AndroidApp,
 
     palette: Palette,
     draw_state: DrawState,
-    face_book: FaceBook,
+    face_book: FaceBook<'a>,
 }
 
-impl MyApp {
+impl<'a> MyApp<'a> {
     pub fn running(&self) -> bool {
         self.running
     }
@@ -146,11 +145,10 @@ impl MyApp {
     }
 }
 
-impl MyApp {
-    pub fn new(app: AndroidApp, face_book: FaceBook) -> Self {
+impl<'a> MyApp<'a> {
+    pub fn new(face_book: FaceBook<'a>) -> Self {
         Self {
             running: true,
-            app,
             palette: Default::default(),
             face_book,
             draw_state: DrawState::NeedsRelayout,
@@ -158,7 +156,7 @@ impl MyApp {
         }
     }
 
-    fn event_callback(&mut self, event: PollEvent) {
+    fn event_callback(&mut self, event: PollEvent, app: AndroidApp) {
         let main_event = match event {
             PollEvent::Wake => {
                 info!("Wake");
@@ -172,7 +170,7 @@ impl MyApp {
         match main_event {
             MainEvent::InitWindow { .. } => {
                 info!("Window initialized");
-                if let Some(window) = self.app.native_window() {
+                if let Some(window) = app.native_window() {
                     window
                         .set_buffers_geometry(0, 0, Some(HardwareBufferFormat::R8G8B8A8_UNORM))
                         .ok();
@@ -190,7 +188,7 @@ impl MyApp {
                 self.draw_state.redraw();
             }
             MainEvent::InputAvailable => {
-                if let Ok(mut iter) = self.app.clone().input_events_iter() {
+                if let Ok(mut iter) = app.clone().input_events_iter() {
                     while iter.next(|i| self.handle_input(i)) {}
                 }
             }
@@ -232,11 +230,11 @@ impl MyApp {
             }
         }
 
-        if let Some(window) = self.app.native_window() {
+        if let Some(window) = app.native_window() {
             match self.draw_state {
                 DrawState::Ok => (),
                 DrawState::NeedsRelayout => {
-                    if let Some(rect) = insets::get_bounds(&self.app) {
+                    if let Some(rect) = insets::get_bounds(&app) {
                         self.state.relayout(rect);
                         self.render_frame(&window);
                     }
@@ -267,7 +265,7 @@ impl MyApp {
             lock.height() as u32,
         )
         .unwrap();
-        let mut canvas = Canvas::new(self.face_book.clone(), pixmap, self.palette.clone());
+        let mut canvas = Canvas::new(&self.face_book, pixmap, self.palette.clone());
         self.state.render_frame(&mut canvas);
     }
 }
@@ -342,9 +340,6 @@ const SUDOKUS: &[(&str, &str)] = &[
 
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
-    // sudoku_types::test::number_bucket();
-    // sudoku_types::test::pos_bucket();
-
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(LevelFilter::Info)
@@ -352,35 +347,44 @@ fn android_main(app: AndroidApp) {
     );
 
     let asset_mgr = app.asset_manager();
-    let get_bytes = |s: &str| {
-        let path = CString::new(s).unwrap();
-
-        let mut asset = asset_mgr.open(&path).expect("font was not available");
-
-        let mut font_bytes = Vec::new();
-        asset
-            .read_to_end(&mut font_bytes)
-            .expect("could not get asset buffer");
-        let font_bytes = font_bytes.leak(); // TODO doesn't seem rusty
-        (
-            s.into(),
-            ttf_parser::Face::parse(font_bytes, 0).expect("could not parse font"),
-        )
-    };
-    let faces = vec![
-        get_bytes("font/Noto_Sans/static/NotoSans-Regular.ttf"),
-        get_bytes("font/Noto_Sans_Symbols/static/NotoSansSymbols-Regular.ttf"),
-        get_bytes("font/Noto_Sans_Symbols_2/NotoSansSymbols2-Regular.ttf"),
-        get_bytes("font/Noto_Emoji/static/NotoEmoji-Regular.ttf"),
-        get_bytes("font/Noto_Sans_JP/static/NotoSansJP-Regular.ttf"),
+    let font_paths = [
+        "font/Noto_Sans/static/NotoSans-Regular.ttf",
+        "font/Noto_Sans_Symbols/static/NotoSansSymbols-Regular.ttf",
+        "font/Noto_Sans_Symbols_2/NotoSansSymbols2-Regular.ttf",
+        "font/Noto_Emoji/static/NotoEmoji-Regular.ttf",
+        "font/Noto_Sans_JP/static/NotoSansJP-Regular.ttf",
     ];
 
-    let mut state = MyApp::new(app.clone(), FaceBook(faces));
+    let font_buffers: Vec<Vec<u8>> = font_paths
+        .iter()
+        .map(|path_str| {
+            let path = CString::new(*path_str).unwrap();
+            let mut asset = asset_mgr.open(&path).expect("font was not available");
+            let mut font_bytes = Vec::new();
+            asset
+                .read_to_end(&mut font_bytes)
+                .expect("could not get asset buffer");
+            font_bytes
+        })
+        .collect();
+
+    let faces = font_paths
+        .iter()
+        .zip(&font_buffers)
+        .map(|(path, bytes)| {
+            (
+                path.to_string(),
+                ttf_parser::Face::parse(bytes, 0).expect("could not parse font"),
+            )
+        })
+        .collect();
+
+    let mut state = MyApp::new(FaceBook::new(faces));
 
     while state.running() {
         // Redraw on events or poll interval
         app.poll_events(Some(Duration::from_millis(16)), |event| {
-            state.event_callback(event)
+            state.event_callback(event, app.clone())
         });
     }
 }

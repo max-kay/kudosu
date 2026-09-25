@@ -1,4 +1,10 @@
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    sync::Mutex,
+};
+
 use enum_map::{Enum, EnumMap, enum_map};
+use log::info;
 use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, PixmapMut, Stroke, Transform};
 use ttf_parser::{Face, OutlineBuilder};
 
@@ -215,14 +221,33 @@ impl OutlineBuilder for SkiaOutlineBuilder {
     }
 }
 
-#[derive(Clone)]
-pub struct FaceBook(pub Vec<(String, Face<'static>)>);
+pub struct FaceBook<'a> {
+    faces: Vec<(String, Face<'a>)>,
+    number_paths: [CharPath; 9],
+    char_paths: Mutex<HashMap<char, CharPath>>,
+}
 
 type GlyphId = (usize, ttf_parser::GlyphId);
 
-impl FaceBook {
-    fn glyph_index(&self, c: char) -> Option<GlyphId> {
-        for (i, (_name, face)) in self.0.iter().enumerate() {
+impl<'a> FaceBook<'a> {
+    pub fn new(faces: Vec<(String, Face<'a>)>) -> Self {
+        let number_paths = std::array::from_fn(|i| {
+            let c = (b'1' + i as u8) as char;
+            Self::build_char_path(&faces, c)
+        });
+        Self {
+            faces,
+            number_paths,
+            char_paths: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn number_path(&self, num: Number) -> &CharPath {
+        &self.number_paths[(num.as_u8() - 1) as usize]
+    }
+
+    fn glyph_index_in(faces: &[(String, Face<'a>)], c: char) -> Option<GlyphId> {
+        for (i, (_name, face)) in faces.iter().enumerate() {
             if let Some(id) = face.glyph_index(c) {
                 return Some((i, id));
             }
@@ -230,27 +255,53 @@ impl FaceBook {
         None
     }
 
-    fn outline_glyph(&self, id: GlyphId, builder: &mut SkiaOutlineBuilder) {
-        self.0[id.0].1.outline_glyph(id.1, builder);
+    fn build_char_path(faces: &[(String, Face<'a>)], c: char) -> CharPath {
+        let glyph_id = Self::glyph_index_in(faces, c)
+            .unwrap_or_else(|| panic!("glyph for character `{}` not found in any font", c));
+        let face = &faces[glyph_id.0].1;
+        let mut builder = SkiaOutlineBuilder(PathBuilder::new());
+        face.outline_glyph(glyph_id.1, &mut builder);
+        let path = builder.0.finish().expect("path should always be valid");
+        let cap_height = face
+            .capital_height()
+            .or_else(|| face.ascender().into())
+            .unwrap_or(face.height() as i16) as f32;
+        let advance = face
+            .glyph_hor_advance(glyph_id.1)
+            .expect("every glyph has advance") as f32;
+
+        CharPath {
+            path,
+            advance,
+            cap_height,
+        }
     }
 
-    pub fn capital_height(&self, id: GlyphId) -> Option<i16> {
-        self.0[id.0].1.capital_height()
-    }
-
-    pub fn glyph_hor_advance(&self, id: GlyphId) -> Option<u16> {
-        self.0[id.0].1.glyph_hor_advance(id.1)
+    pub fn make_char_path(&self, c: char) -> CharPath {
+        if ('1'..='9').contains(&c) {
+            let idx = (c as u8 - b'1') as usize;
+            return self.number_paths[idx].clone();
+        }
+        let mut char_map = self.char_paths.lock().expect("never poisoned");
+        match char_map.entry(c) {
+            Entry::Occupied(occupied_entry) => occupied_entry.get().clone(),
+            Entry::Vacant(vacant_entry) => {
+                let path = Self::build_char_path(&self.faces, c);
+                vacant_entry.insert(path.clone());
+                path
+            }
+        }
     }
 }
 
 pub struct Canvas<'a> {
     pixmap: PixmapMut<'a>,
     pub palette: Palette, // TODO remove pub after done
-    face_book: FaceBook,
+    face_book: &'a FaceBook<'a>,
 }
 
 impl<'a> Canvas<'a> {
-    pub fn new(face_book: FaceBook, pixmap: PixmapMut<'a>, palette: Palette) -> Self {
+    pub fn new(face_book: &'a FaceBook<'a>, pixmap: PixmapMut<'a>, palette: Palette) -> Self {
         Self {
             pixmap,
             face_book,
@@ -315,7 +366,7 @@ impl Canvas<'_> {
     pub fn draw_center_notes(&mut self, rect: Rect, notes: NumberBucket, color: Swatch) {
         let paths = notes
             .into_iter()
-            .map(|n| self.make_char_path(n.as_char()))
+            .map(|n| self.face_book.number_path(n))
             .collect::<Vec<_>>();
         let total_advance: f32 = paths.iter().map(|p| p.advance).sum();
         let cap_height = paths.first().unwrap().cap_height;
@@ -324,25 +375,25 @@ impl Canvas<'_> {
             .min((rect.width() - 2.0 * margin) / total_advance);
         let mut start_x = rect.left() + rect.width() / 2.0 - total_advance * scale / 2.0;
         let ground_line = rect.top() + rect.height() / 2.0 + cap_height * scale / 2.0;
-        for CharPath { path, advance, .. } in paths {
+        for p in paths {
             self.pixmap.fill_path(
-                &path,
+                &p.path,
                 &self.palette.0[color].into_paint(),
                 FillRule::Winding,
                 Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
                 None,
             );
-            start_x += advance * scale;
+            start_x += p.advance * scale;
         }
     }
 
     pub fn draw_corner_notes(&mut self, rect: Rect, notes: NumberBucket, color: Swatch) {
         let paths = notes
             .into_iter()
-            .map(|n| self.make_char_path(n.as_char()))
+            .map(|n| self.face_book.number_path(n))
             .collect::<Vec<_>>();
 
-        let (top, bottom): (&[CharPath], &[CharPath]) = if paths.len() <= 2 {
+        let (top, bottom): (&[&CharPath], &[&CharPath]) = if paths.len() <= 2 {
             (&paths[..], &[])
         } else {
             let len = paths.len();
@@ -370,15 +421,15 @@ impl Canvas<'_> {
         let mut start_x = rect.left() + margin;
 
         let ground_line = rect.top() + cap_height * scale + margin;
-        for CharPath { path, advance, .. } in top {
+        for p in top {
             self.pixmap.fill_path(
-                &path,
+                &p.path,
                 &self.palette.0[color].into_paint(),
                 FillRule::Winding,
                 Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
                 None,
             );
-            start_x += advance * scale + top_spacing;
+            start_x += p.advance * scale + top_spacing;
         }
 
         let bottom_spacing = (rect.width() - bottom_advance * scale - 2.0 * margin)
@@ -386,20 +437,20 @@ impl Canvas<'_> {
         let mut start_x = rect.left() + margin;
 
         let ground_line = rect.bottom() - margin;
-        for CharPath { path, advance, .. } in bottom {
+        for p in bottom {
             self.pixmap.fill_path(
-                &path,
+                &p.path,
                 &self.palette.0[color].into_paint(),
                 FillRule::Winding,
                 Transform::from_scale(scale, -scale).post_translate(start_x, ground_line),
                 None,
             );
-            start_x += advance * scale + bottom_spacing;
+            start_x += p.advance * scale + bottom_spacing;
         }
     }
 
     pub fn draw_num(&mut self, num: Number, rect: Rect, color: Swatch) {
-        let l = self.make_char_path(num.as_char());
+        let l = self.face_book.number_path(num);
         let center_y = rect.top() + rect.height() / 2.0;
         let center_x = rect.left() + rect.width() / 2.0;
         let font_height = rect.height() * (1.0 - 2.0 * CELL_MARGIN);
@@ -443,33 +494,14 @@ impl Canvas<'_> {
     }
 
     pub fn make_char_path(&self, c: char) -> CharPath {
-        let glyph_id = self
-            .face_book
-            .glyph_index(c)
-            .expect(&format!("{} does not exist", c));
-        let mut builder = SkiaOutlineBuilder(PathBuilder::new());
-        self.face_book.outline_glyph(glyph_id, &mut builder);
-        let path = builder.0.finish().expect("path should always be valid");
-
-        let cap_height = self
-            .face_book
-            .capital_height(glyph_id)
-            .expect("Face should have capital height") as f32;
-
-        CharPath {
-            path,
-            advance: self
-                .face_book
-                .glyph_hor_advance(glyph_id)
-                .expect("every glyph has advance") as f32,
-            cap_height,
-        }
+        self.face_book.make_char_path(c)
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct CharPath {
-    path: Path,
-    advance: f32,
+    pub path: Path,
+    pub advance: f32,
     // TODO remove fields below
-    cap_height: f32,
+    pub cap_height: f32,
 }
