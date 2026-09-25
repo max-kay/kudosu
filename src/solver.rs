@@ -279,35 +279,51 @@ impl Solver {
         };
         for (rect, button) in layout.get_button_rects() {
             let is_active = self.button_state.is_active(button);
-            let foreground_color = if is_active {
-                canvas.fill_rect_rounded(rect, rect.width() / 20.0, Swatch::ButtonBackgroundActive);
-                Swatch::ButtonForegroundActive
+            let (background, foreground) = if is_active {
+                (
+                    Swatch::ButtonBackgroundActive,
+                    Swatch::ButtonForegroundActive,
+                )
             } else {
-                canvas.fill_rect_rounded(rect, rect.width() / 20.0, Swatch::ButtonBackground);
-                Swatch::ButtonForeground
+                (Swatch::ButtonBackground, Swatch::ButtonForeground)
             };
 
             match button {
                 Button::Number(num) => {
-                    canvas.draw_num(num, rect, foreground_color);
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.draw_num(num, rect, foreground);
                 }
-                Button::Undo => {}
-                Button::Redo => {}
-                Button::SelectionMode => {}
-                Button::Delete => {}
+                Button::Undo => canvas.draw_char('←', rect, Swatch::UiColor),
+                Button::Redo => canvas.draw_char('→', rect, Swatch::UiColor),
+                Button::SelectionMode => {
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.draw_char('▚', rect, foreground);
+                }
+                Button::Delete => {
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.draw_char('⌫', rect, foreground);
+                }
                 Button::Solve => {
-                    canvas.draw_num(Number::N1, rect, foreground_color);
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.draw_num(Number::N1, rect, foreground);
                 }
                 Button::Center => {
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
                     let bucket = NumberBucket::example();
-                    canvas.draw_center_notes(rect, bucket, foreground_color);
+                    canvas.draw_center_notes(rect, bucket, foreground);
                 }
                 Button::Corner => {
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
                     let bucket = NumberBucket::example();
-                    canvas.draw_corner_notes(rect, bucket, foreground_color);
+                    canvas.draw_corner_notes(rect, bucket, foreground);
                 }
-                Button::Color => {}
-                Button::Generic1 | Button::Generic2 | Button::Generic3 => {}
+                Button::Color => {
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                    canvas.draw_char('✎', rect, foreground);
+                }
+                Button::Generic1 | Button::Generic2 | Button::Generic3 => {
+                    canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
+                }
             }
         }
     }

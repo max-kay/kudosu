@@ -23,7 +23,7 @@ pub use selection::SelectionScreen;
 pub use sudoku_types::{GridPosition, NineGrid, Number, NumberBucket, PositionBucket, Sudoku};
 
 use crate::{
-    canvas::{Canvas, Palette, Swatch},
+    canvas::{Canvas, FaceBook, Palette, Swatch},
     solver::Solver,
 };
 
@@ -134,7 +134,7 @@ pub struct MyApp {
 
     palette: Palette,
     draw_state: DrawState,
-    face: Face<'static>,
+    face_book: FaceBook,
 }
 
 impl MyApp {
@@ -148,12 +148,12 @@ impl MyApp {
 }
 
 impl MyApp {
-    pub fn new(app: AndroidApp, face: Face<'static>) -> Self {
+    pub fn new(app: AndroidApp, face_book: FaceBook) -> Self {
         Self {
             running: true,
             app,
             palette: Default::default(),
-            face,
+            face_book,
             draw_state: DrawState::NeedsRelayout,
             state: AppState::Welcome(Welcome::new()),
         }
@@ -272,7 +272,7 @@ impl MyApp {
             lock.height() as u32,
         )
         .unwrap();
-        let mut canvas = Canvas::new(self.face.clone(), pixmap, self.palette.clone());
+        let mut canvas = Canvas::new(self.face_book.clone(), pixmap, self.palette.clone());
         self.state.render_frame(&mut canvas);
     }
 }
@@ -359,18 +359,31 @@ fn android_main(app: AndroidApp) {
     );
 
     let asset_mgr = app.asset_manager();
-    let path = CString::new("Libre_Baskerville/static/LibreBaskerville-Medium.ttf").unwrap();
+    let get_bytes = |s: &str| {
+        let path = CString::new(s).unwrap();
 
-    let mut asset = asset_mgr.open(&path).expect("font was not available");
+        let mut asset = asset_mgr.open(&path).expect("font was not available");
 
-    let mut font_bytes = Vec::new();
-    asset
-        .read_to_end(&mut font_bytes)
-        .expect("could not get asset buffer");
-    let font_bytes = font_bytes.leak(); // TODO doesn't seem rusty
-    let face = ttf_parser::Face::parse(font_bytes, 0).expect("could not parse font");
+        let mut font_bytes = Vec::new();
+        asset
+            .read_to_end(&mut font_bytes)
+            .expect("could not get asset buffer");
+        let font_bytes = font_bytes.leak(); // TODO doesn't seem rusty
+        (
+            s.into(),
+            ttf_parser::Face::parse(font_bytes, 0).expect("could not parse font"),
+        )
+    };
+    let faces = vec![
+        get_bytes("font/Noto_Sans/static/NotoSans-Regular.ttf"),
+        get_bytes("font/Noto_Sans_Symbols/static/NotoSansSymbols-Regular.ttf"),
+        get_bytes("font/Noto_Sans_Symbols_2/NotoSansSymbols2-Regular.ttf"),
+        get_bytes("font/Noto_Emoji/static/NotoEmoji-Regular.ttf"),
+        get_bytes("font/Noto_Sans_JP/static/NotoSansJP-Regular.ttf"),
+    ];
+
     info!("Kudosu Started!");
-    let mut state = MyApp::new(app.clone(), face);
+    let mut state = MyApp::new(app.clone(), FaceBook(faces));
 
     while state.running() {
         // Redraw on events or poll interval

@@ -20,6 +20,7 @@ impl IntoPaint for Color {
 #[derive(Debug, Clone, Copy, Enum)]
 pub enum Swatch {
     Background,
+    UiColor,
 
     GridBackground,
     GridLine,
@@ -46,6 +47,7 @@ impl Default for Palette {
         // and alpha is 1.0 (so color channels are trivially valid pre-multiplied values).
         Self(enum_map! {
             Swatch::Background=> unsafe { Color::from_rgba_unchecked(0.3, 0.3, 0.3, 1.0) },
+            Swatch::UiColor => Color::WHITE,
 
             Swatch::GridBackground=> Color::WHITE,
             Swatch::GridLine=> Color::BLACK,
@@ -189,17 +191,45 @@ impl OutlineBuilder for SkiaOutlineBuilder {
     }
 }
 
+#[derive(Clone)]
+pub struct FaceBook(pub Vec<(String, Face<'static>)>);
+
+type GlyphId = (usize, ttf_parser::GlyphId);
+
+impl FaceBook {
+    pub fn glyph_index(&self, c: char) -> Option<GlyphId> {
+        for (i, (_name, face)) in self.0.iter().enumerate() {
+            if let Some(id) = face.glyph_index(c) {
+                return Some((i, id));
+            }
+        }
+        None
+    }
+
+    pub fn outline_glyph(&self, id: GlyphId, builder: &mut SkiaOutlineBuilder) {
+        self.0[id.0].1.outline_glyph(id.1, builder);
+    }
+
+    pub fn capital_height(&self, id: GlyphId) -> Option<i16> {
+        self.0[id.0].1.capital_height()
+    }
+
+    pub fn glyph_hor_advance(&self, id: GlyphId) -> Option<u16> {
+        self.0[id.0].1.glyph_hor_advance(id.1)
+    }
+}
+
 pub struct Canvas<'a> {
     pixmap: PixmapMut<'a>,
     pub palette: Palette, // TODO remove pub after done
-    face: Face<'static>,
+    face_book: FaceBook,
 }
 
 impl<'a> Canvas<'a> {
-    pub fn new(face: Face<'static>, pixmap: PixmapMut<'a>, palette: Palette) -> Self {
+    pub fn new(face_book: FaceBook, pixmap: PixmapMut<'a>, palette: Palette) -> Self {
         Self {
             pixmap,
-            face,
+            face_book,
             palette,
         }
     }
@@ -328,7 +358,11 @@ impl Canvas<'_> {
     }
 
     pub fn draw_num(&mut self, num: Number, rect: Rect, color: Swatch) {
-        let l = self.make_char_path(num.as_char());
+        self.draw_char(num.as_char(), rect, color);
+    }
+
+    pub fn draw_char(&mut self, c: char, rect: Rect, color: Swatch) {
+        let l = self.make_char_path(c);
         let center_y = rect.top() + rect.height() / 2.0;
         let center_x = rect.left() + rect.width() / 2.0;
         let font_height = rect.height() * (1.0 - 2.0 * CELL_MARGIN);
@@ -350,20 +384,25 @@ impl Canvas<'_> {
     }
 
     pub fn make_char_path(&self, c: char) -> CharPath {
-        let glyph_id = self.face.glyph_index(c).expect("every digit is here");
+        let glyph_id = self
+            .face_book
+            .glyph_index(c)
+            .expect(&format!("{} does not exist", c));
         let mut builder = SkiaOutlineBuilder(PathBuilder::new());
-        self.face.outline_glyph(glyph_id, &mut builder);
+        self.face_book.outline_glyph(glyph_id, &mut builder);
         let path = builder.0.finish().expect("path should always be valid");
 
         let cap_height = self
-            .face
-            .capital_height()
-            .map(|h| h as f32)
-            .unwrap_or_else(|| self.face.ascender() as f32);
+            .face_book
+            .capital_height(glyph_id)
+            .expect("Face should have capital height") as f32;
 
         CharPath {
             path,
-            advance: self.face.glyph_hor_advance(glyph_id).unwrap_or(0) as f32,
+            advance: self
+                .face_book
+                .glyph_hor_advance(glyph_id)
+                .expect("every glyph has advance") as f32,
             cap_height,
         }
     }
