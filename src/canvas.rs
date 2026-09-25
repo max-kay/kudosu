@@ -21,6 +21,7 @@ impl IntoPaint for Color {
 pub enum Swatch {
     Background,
     UiColor,
+    UiColorInActive,
 
     GridBackground,
     GridLine,
@@ -48,6 +49,7 @@ impl Default for Palette {
         Self(enum_map! {
             Swatch::Background=> unsafe { Color::from_rgba_unchecked(0.3, 0.3, 0.3, 1.0) },
             Swatch::UiColor => Color::WHITE,
+            Swatch::UiColorInActive => unsafe { Color::from_rgba_unchecked(0.5, 0.5, 0.5, 1.0) },
 
             Swatch::GridBackground=> Color::WHITE,
             Swatch::GridLine=> Color::BLACK,

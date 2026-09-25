@@ -30,7 +30,7 @@ enum InputMode {
 }
 
 struct ButtonState {
-    clear_on_new_selection: bool,
+    add_on_new_selection: bool,
     input_mode: InputMode,
     secondary_input: InputMode,
     selected_num: Option<Number>,
@@ -49,7 +49,7 @@ impl ButtonState {
                     false
                 }
             }
-            Button::SelectionMode => self.clear_on_new_selection,
+            Button::SelectionMode => self.add_on_new_selection,
             Button::Solve => self.input_mode == InputMode::Solve,
             Button::Center => self.input_mode == InputMode::Center,
             Button::Corner => self.input_mode == InputMode::Corner,
@@ -62,10 +62,10 @@ impl ButtonState {
     }
 
     pub fn get_sel_mode(&self) -> SelectionMode {
-        if self.clear_on_new_selection {
-            SelectionMode::New
-        } else {
+        if self.add_on_new_selection {
             SelectionMode::WithOld
+        } else {
+            SelectionMode::New
         }
     }
 }
@@ -73,7 +73,7 @@ impl ButtonState {
 impl Default for ButtonState {
     fn default() -> Self {
         Self {
-            clear_on_new_selection: true,
+            add_on_new_selection: false,
             input_mode: InputMode::Solve,
             secondary_input: InputMode::Center,
             selected_num: None,
@@ -293,8 +293,20 @@ impl Solver {
                     canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
                     canvas.draw_num(num, rect, foreground);
                 }
-                Button::Undo => canvas.draw_char('←', rect, Swatch::UiColor),
-                Button::Redo => canvas.draw_char('→', rect, Swatch::UiColor),
+                Button::Undo => {
+                    if self.undo_stack.can_undo() {
+                        canvas.draw_char('←', rect, Swatch::UiColor)
+                    } else {
+                        canvas.draw_char('←', rect, Swatch::UiColorInActive)
+                    }
+                }
+                Button::Redo => {
+                    if self.undo_stack.can_redo() {
+                        canvas.draw_char('→', rect, Swatch::UiColor)
+                    } else {
+                        canvas.draw_char('→', rect, Swatch::UiColorInActive)
+                    }
+                }
                 Button::SelectionMode => {
                     canvas.fill_rect_rounded(rect, rect.width() / 20.0, background);
                     canvas.draw_char('▚', rect, foreground);
@@ -363,8 +375,8 @@ impl Component for Solver {
                 Button::Redo => self.redo(),
 
                 Button::SelectionMode => {
-                    self.button_state.clear_on_new_selection =
-                        !self.button_state.clear_on_new_selection;
+                    self.button_state.add_on_new_selection =
+                        !self.button_state.add_on_new_selection;
                     self.sel_mode = self.button_state.get_sel_mode();
                 }
                 Button::Delete => self.handle_delete(),

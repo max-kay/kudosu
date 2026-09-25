@@ -700,6 +700,15 @@ impl DiffStack {
         Some(diff)
     }
 
+    pub fn can_undo(&self) -> bool {
+        return self.pointer != 0;
+    }
+
+    pub fn can_redo(&self) -> bool {
+        let lens = &self.stack[self.pointer..][..Self::PREAMBLE_SIZE];
+        !lens.iter().all(|x| *x == 0)
+    }
+
     #[allow(unused)]
     pub fn log_state(&self) {
         info!("ptr: {:?}", self.pointer);
