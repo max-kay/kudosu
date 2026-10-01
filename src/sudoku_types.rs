@@ -17,7 +17,7 @@ use crate::canvas::{Canvas, Swatch};
 mod iter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct GridPosition(pub u8);
+pub struct GridPosition(u8);
 
 impl GridPosition {
     pub fn new(row: u8, col: u8) -> Self {
@@ -48,6 +48,10 @@ impl GridPosition {
 
     fn as_mask(&self) -> u128 {
         1 << self.0
+    }
+
+    unsafe fn from_index_unchecked(val: u8) -> Self {
+        Self(val)
     }
 }
 
@@ -327,7 +331,8 @@ impl<T: Copy> NineGrid<T> {
 
 impl<T> IndexMut<GridPosition> for NineGrid<T> {
     fn index_mut(&mut self, index: GridPosition) -> &mut Self::Output {
-        &mut self.0[index.0 as usize]
+        // SAFETY: GridPosition is always valid
+        unsafe { self.0.get_unchecked_mut(index.0 as usize) }
     }
 }
 
@@ -335,7 +340,8 @@ impl<T> Index<GridPosition> for NineGrid<T> {
     type Output = T;
 
     fn index(&self, index: GridPosition) -> &Self::Output {
-        &self.0[index.0 as usize]
+        // SAFETY: GridPosition is always valid
+        unsafe { self.0.get_unchecked(index.0 as usize) }
     }
 }
 

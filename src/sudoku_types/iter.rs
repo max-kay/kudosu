@@ -20,7 +20,7 @@ impl Iterator for PosIter {
         }
         let index = self.0.trailing_zeros() as u8;
         self.0 &= !(1 << index);
-        Some(GridPosition(index))
+        Some(unsafe { GridPosition::from_index_unchecked(index) })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
