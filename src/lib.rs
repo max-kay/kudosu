@@ -26,6 +26,30 @@ use crate::{
     solver::Solver,
 };
 
+pub enum DrawState {
+    Ok,
+    NeedsRelayout,
+    NeedsRedraw,
+}
+
+impl DrawState {
+    pub fn clear(&mut self) {
+        *self = DrawState::Ok;
+    }
+
+    pub fn relayout(&mut self) {
+        *self = DrawState::NeedsRelayout;
+    }
+
+    pub fn redraw(&mut self) {
+        if let Self::NeedsRelayout = self {
+            return;
+        } else {
+            *self = Self::NeedsRedraw;
+        }
+    }
+}
+
 enum Navigation {
     ToSelection(usize),
     ToSolving(usize),
@@ -42,10 +66,13 @@ trait Component {
     fn render_frame(&self, canvas: &mut Canvas<'_>);
 
     fn relayout(&mut self, bounds: Rect);
+
+    fn lost_focus(&mut self) {}
 }
 
 const NAME: &str = "Kudosu";
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct Welcome {}
 
 impl Welcome {
@@ -77,6 +104,7 @@ impl Component for Welcome {
     fn relayout(&mut self, _bounds: Rect) {}
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 enum AppState {
     Welcome(Welcome),
     Selection(SelectionScreen),
@@ -124,9 +152,17 @@ impl AppState {
             AppState::Solving(game_state) => game_state.relayout(bounds),
         }
     }
+
+    fn lost_focus(&mut self) {
+        match self {
+            AppState::Welcome(welcome) => welcome.lost_focus(),
+            AppState::Selection(selection_screen) => selection_screen.lost_focus(),
+            AppState::Solving(game_state) => game_state.lost_focus(),
+        }
+    }
 }
 
-pub struct MyApp<'a> {
+struct MyApp<'a> {
     state: AppState,
     running: bool,
 
@@ -136,17 +172,21 @@ pub struct MyApp<'a> {
 }
 
 impl<'a> MyApp<'a> {
-    pub fn running(&self) -> bool {
+    fn running(&self) -> bool {
         self.running
     }
 
-    pub fn handle_input(&mut self, input: &InputEvent) -> InputStatus {
+    fn handle_input(&mut self, input: &InputEvent) -> InputStatus {
         self.state.handle_input(input, &mut self.draw_state)
+    }
+
+    fn save_memory(&mut self) {
+        warn!("downloading RAM...")
     }
 }
 
 impl<'a> MyApp<'a> {
-    pub fn new(face_book: FaceBook<'a>) -> Self {
+    fn new(face_book: FaceBook<'a>) -> Self {
         Self {
             running: true,
             palette: Default::default(),
@@ -159,7 +199,6 @@ impl<'a> MyApp<'a> {
     fn event_callback(&mut self, event: PollEvent, app: AndroidApp) {
         let main_event = match event {
             PollEvent::Wake => {
-                info!("Wake");
                 return;
             }
             PollEvent::Timeout => return,
@@ -194,6 +233,7 @@ impl<'a> MyApp<'a> {
             }
             MainEvent::Destroy => {
                 self.running = false;
+                info!("Destroyed app");
             }
             MainEvent::ContentRectChanged { .. } => {
                 self.draw_state.relayout();
@@ -202,19 +242,34 @@ impl<'a> MyApp<'a> {
                 info!("GainedFocus");
             }
             MainEvent::LostFocus => {
+                self.state.lost_focus();
                 info!("LostFocus");
             }
             MainEvent::ConfigChanged { .. } => {
                 self.draw_state.relayout();
             }
-            MainEvent::LowMemory => warn!("running low on memory"),
+            MainEvent::LowMemory => self.save_memory(),
             MainEvent::Start => info!("Start"),
+
             MainEvent::Resume { loader, .. } => {
-                info!("Resume")
+                // Honestly not sure what this does
+                // In the emulator this doesn't work and all state is lost
+                // and on my device it is not necessary and all state is preserved without load
+                info!("try load state");
+                if let Some(bytes) = loader.load() {
+                    self.state =
+                        serde_json::from_slice(&bytes).expect("serialised previously so is valid");
+                    self.draw_state.relayout();
+                    info!("loaded state");
+                }
             }
             MainEvent::SaveState { saver, .. } => {
-                info!("SaveState")
+                let buf = serde_json::to_vec(&self.state).expect("serialisation does not fail");
+                info!("size of state is {}", buf.len());
+                saver.store(&buf);
+                info!("saved state");
             }
+
             MainEvent::Pause => {
                 info!("Pause")
             }
@@ -247,7 +302,7 @@ impl<'a> MyApp<'a> {
         }
     }
 
-    pub fn render_frame(&self, window: &NativeWindow) {
+    fn render_frame(&self, window: &NativeWindow) {
         // TODO dont spin wait
         let mut lock = loop {
             if let Ok(lock) = window.lock(None) {
@@ -267,30 +322,6 @@ impl<'a> MyApp<'a> {
         .unwrap();
         let mut canvas = Canvas::new(&self.face_book, pixmap, self.palette.clone());
         self.state.render_frame(&mut canvas);
-    }
-}
-
-pub enum DrawState {
-    Ok,
-    NeedsRelayout,
-    NeedsRedraw,
-}
-
-impl DrawState {
-    pub fn clear(&mut self) {
-        *self = DrawState::Ok;
-    }
-
-    pub fn relayout(&mut self) {
-        *self = DrawState::NeedsRelayout;
-    }
-
-    pub fn redraw(&mut self) {
-        if let Self::NeedsRelayout = self {
-            return;
-        } else {
-            *self = Self::NeedsRedraw;
-        }
     }
 }
 
@@ -345,6 +376,8 @@ fn android_main(app: AndroidApp) {
             .with_max_level(LevelFilter::Info)
             .with_tag(NAME),
     );
+
+    info!("----- android_main was called -----");
 
     let asset_mgr = app.asset_manager();
     let font_paths = [

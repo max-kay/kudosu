@@ -9,12 +9,14 @@ use tiny_skia::Stroke;
 
 use crate::{
     Canvas, Component, DrawState, GridPosition, Navigation, Number, NumberBucket, PositionBucket,
-    Rect, SUDOKUS, Sudoku,
-    canvas::Swatch,
-    sudoku_types::{DiffStack, GridLayout},
+    Rect, SUDOKUS, Sudoku, canvas::Swatch, sudoku_types::DiffStack,
 };
 
-#[derive(Copy, Clone)]
+pub mod layout;
+
+use layout::{Button, Hit, Layout, MenuItem};
+
+#[derive(Copy, Clone, serde::Deserialize, serde::Serialize)]
 pub enum SelectionMode {
     New,
     WithOld,
@@ -22,7 +24,7 @@ pub enum SelectionMode {
     Clear,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum InputMode {
     Solve,
     Corner,
@@ -30,6 +32,7 @@ enum InputMode {
     Color,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ButtonState {
     add_on_new_selection: bool,
     input_mode: InputMode,
@@ -181,6 +184,7 @@ impl Default for ButtonState {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Solver {
     sudoku: Box<Sudoku>,
     index: usize,
@@ -189,6 +193,8 @@ pub struct Solver {
     button_state: ButtonState,
     layout: Option<Layout>,
     needs_diff: bool,
+    is_in_pause: bool,
+
     undo_stack: DiffStack,
 }
 
@@ -205,6 +211,7 @@ impl Solver {
             button_state: Default::default(),
             layout: None,
             needs_diff: false,
+            is_in_pause: false,
             undo_stack: DiffStack::new(),
         }
     }
@@ -254,6 +261,10 @@ impl Solver {
         } else {
             info!("No redo left")
         }
+    }
+
+    pub fn enter_pause(&mut self) {
+        self.is_in_pause = true;
     }
 
     pub fn handle_delete(&mut self) {
@@ -538,16 +549,23 @@ impl Component for Solver {
         let old_sudoku = self.sudoku.clone();
 
         let pointer = motion_event.pointer_at_index(0);
+        let action = motion_event.action();
         let hit = if let Some(layout) = self.layout.as_ref() {
             layout.hit(pointer.x(), pointer.y())
         } else {
+            if action == MotionAction::Up {
+                self.button_state.started_on = None;
+            }
             return (InputStatus::Unhandled, Navigation::None);
         };
-        match motion_event.action() {
+        match action {
             MotionAction::Down => {
-                debug_assert!(self.button_state.started_on.is_none());
+                if self.button_state.started_on.is_some() {
+                    warn!("had start of touch when starting new touch event");
+                }
                 self.button_state.started_on = Some(hit);
                 self.button_state.active_hover = true;
+                self.button_state.selected_num = None;
             }
             MotionAction::Move | MotionAction::Up => {
                 if let Some(h) = self.button_state.started_on {
@@ -557,7 +575,7 @@ impl Component for Solver {
                         self.button_state.active_hover = true;
                     }
                 } else {
-                    warn!("had no start button")
+                    warn!("had no start button during move or up")
                 }
             }
             _ => (),
@@ -568,11 +586,12 @@ impl Component for Solver {
                     self.button_state.started_on,
                     None | Some(Hit::Cell(_)) | Some(Hit::None)
                 ) {
-                    self.handle_grid_input(pos, motion_event.action())
+                    self.handle_grid_input(pos, action)
                 }
             }
-            Hit::Button(button) if motion_event.action() == MotionAction::Up => {
+            Hit::Button(button) if action == MotionAction::Up => {
                 if self.button_state.started_on.is_none() {
+                    warn!("had no start of touch when ending on button");
                     return (InputStatus::Handled, Navigation::None);
                 }
                 if let Some(h) = self.button_state.started_on
@@ -605,22 +624,25 @@ impl Component for Solver {
                 }
             }
             Hit::Button(_) => {}
-            Hit::Menu(menu) if motion_event.action() == MotionAction::Up => {
+            Hit::Menu(menu) if action == MotionAction::Up => {
                 if self.button_state.started_on.is_none() {
+                    warn!("had no start of touch when ending on menu");
                     return (InputStatus::Handled, Navigation::None);
                 }
                 if let Some(h) = self.button_state.started_on
                     && h != hit
                 {
+                    warn!("had no start of touch when ending on menu button");
                     self.button_state.started_on = None;
                     return (InputStatus::Handled, Navigation::None);
                 }
                 match menu {
-                    Menu::Pause => {
+                    MenuItem::Pause => {
+                        self.button_state.started_on = None;
                         return (InputStatus::Handled, Navigation::ToSelection(self.index));
                     }
-                    Menu::Settings => (),
-                    Menu::Hint => (),
+                    MenuItem::Settings => (),
+                    MenuItem::Hint => (),
                 }
             }
             Hit::Menu(_) => {}
@@ -631,10 +653,10 @@ impl Component for Solver {
                 SelectionMode::Add | SelectionMode::Clear => (),
             },
         }
-        if motion_event.action() == MotionAction::Up && self.button_state.started_on.is_some() {
+        if action == MotionAction::Up {
             self.button_state.started_on = None;
         }
-        draw_state_handle.redraw();
+        draw_state_handle.redraw(); // TODO: is this necessary?
 
         if self.needs_diff
             && let Some(diff) = self.sudoku.form_diff(&old_sudoku)
@@ -708,282 +730,8 @@ impl Component for Solver {
     fn relayout(&mut self, bounds: Rect) {
         self.layout = Some(Layout::new(bounds));
     }
-}
 
-const MARGIN_FACTOR: f32 = 0.05;
-
-#[derive(Clone, Copy)]
-struct ButtonLayout {
-    all: Rect,
-    margin: f32,
-}
-
-impl ButtonLayout {
-    const N_COLS: usize = 5;
-    const N_ROWS: usize = 4;
-    const BUTTONS: [Button; 4 * 5] = [
-        Button::Redo,               // (0, 0)
-        Button::Number(Number::N1), // (1, 0)
-        Button::Number(Number::N2), // (2, 0)
-        Button::Number(Number::N3), // (3, 0)
-        Button::Solve,              // (4, 0)
-        Button::Undo,               // (0, 1)
-        Button::Number(Number::N4), // (1, 1)
-        Button::Number(Number::N5), // (2, 1)
-        Button::Number(Number::N6), // (3, 1)
-        Button::Corner,             // (4, 1)
-        Button::SelectionMode,      // (0, 2)
-        Button::Number(Number::N7), // (1, 2)
-        Button::Number(Number::N8), // (2, 2)
-        Button::Number(Number::N9), // (3, 2)
-        Button::Center,             // (4, 2)
-        Button::Delete,             // (0, 3)
-        Button::Generic(1),         // (1, 3)
-        Button::Generic(2),         // (2, 3)
-        Button::Generic(3),         // (3, 3)
-        Button::Color,              // (4, 3)
-    ];
-
-    pub fn hit(&self, x: f32, y: f32) -> Option<Button> {
-        let norm_x = ((x - self.all.left()) / self.all.width() * Self::N_COLS as f32).floor();
-        let norm_y = ((y - self.all.top()) / self.all.height() * Self::N_ROWS as f32).floor();
-        if !(0.0 <= norm_x && norm_x < Self::N_COLS as f32) {
-            return None;
-        }
-        if !(0.0 <= norm_y && norm_y < Self::N_ROWS as f32) {
-            return None;
-        }
-        Some(Self::BUTTONS[norm_x as usize + norm_y as usize * Self::N_COLS])
-    }
-
-    pub fn get_button_rects(&self) -> Vec<(Rect, Button)> {
-        let mut out = Vec::new();
-        for i in 0..Self::N_ROWS {
-            for j in 0..Self::N_COLS {
-                out.push((
-                    Rect::from_xywh(
-                        self.all.left()
-                            + j as f32 * self.all.width() / Self::N_COLS as f32
-                            + self.margin / 2.0,
-                        self.all.top()
-                            + i as f32 * self.all.height() / Self::N_ROWS as f32
-                            + self.margin / 2.0,
-                        self.all.width() / Self::N_COLS as f32 - self.margin,
-                        self.all.height() / Self::N_ROWS as f32 - self.margin,
-                    ),
-                    Self::BUTTONS[i * Self::N_COLS + j],
-                ))
-            }
-        }
-        out
-    }
-}
-
-#[derive(Clone, Copy)]
-struct MenuLayout {
-    pause: Rect,
-    settings: Rect,
-    hint: Rect,
-}
-
-impl MenuLayout {
-    fn hit(&self, x: f32, y: f32) -> Option<Menu> {
-        if self.pause.contains(x, y) {
-            return Some(Menu::Pause);
-        }
-        if self.settings.contains(x, y) {
-            return Some(Menu::Settings);
-        }
-        if self.hint.contains(x, y) {
-            return Some(Menu::Hint);
-        }
-        return None;
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct Layout {
-    grid: GridLayout,
-    button: ButtonLayout,
-    menu: MenuLayout,
-}
-
-impl Layout {
-    pub fn new_portrait(window: Rect) -> Self {
-        let margin = window.width() * MARGIN_FACTOR;
-        let size = window.width() - 2.0 * margin;
-        let ui_button_size = size / (ButtonLayout::N_COLS as f32 + 1.0);
-
-        let menu_top = window.bottom() - ButtonLayout::N_ROWS as f32 * ui_button_size - margin;
-        let menu_bottom = window.bottom() - margin;
-        let menu_left = window.left() + margin;
-        let menu_right = menu_left + ui_button_size;
-
-        let button_area =
-            Rect::from_ltrb(menu_right, menu_top, window.right() - margin, menu_bottom);
-        let button_margin = ui_button_size / 20.0;
-
-        let grid = GridLayout {
-            left: window.left() + margin,
-            top: button_area.top() - margin - size,
-            size,
-        };
-
-        // Corrected Menu Calculations
-        let menu_width = menu_right - menu_left;
-        let menu_height = menu_bottom - menu_top;
-        let menu_size = menu_width.min(menu_height / 3.0);
-
-        let menu_center_x = (menu_left + menu_right) / 2.0;
-        // Base center Y for the top menu item (pause)
-        let start_y = menu_top + menu_size / 2.0;
-        let menu_shrink = menu_size * MENU_MARGIN;
-
-        Self {
-            grid,
-            button: ButtonLayout {
-                all: button_area,
-                margin: button_margin,
-            },
-            menu: MenuLayout {
-                pause: Rect::square_from_center_side(menu_center_x, start_y, menu_size)
-                    .shrink(menu_shrink),
-
-                settings: Rect::square_from_center_side(
-                    menu_center_x,
-                    start_y + menu_size,
-                    menu_size,
-                )
-                .shrink(menu_shrink),
-
-                hint: Rect::square_from_center_side(
-                    menu_center_x,
-                    start_y + 2.0 * menu_size,
-                    menu_size,
-                )
-                .shrink(menu_shrink),
-            },
-        }
-    }
-
-    pub fn new_landscape(window: Rect) -> Self {
-        let margin = window.height() * MARGIN_FACTOR;
-        let grid_size = window.height() - 2.0 * margin;
-        let ui_button_size =
-            (window.width() - 4.0 * margin - grid_size) / (ButtonLayout::N_COLS as f32 + 1.0);
-
-        let menu_left = window.left() + 2.0 * margin + grid_size;
-        let menu_right = menu_left + ui_button_size;
-        let menu_top = window.bottom() - margin - ui_button_size * ButtonLayout::N_ROWS as f32;
-        let menu_bottom = window.bottom() - margin;
-
-        let button_area =
-            Rect::from_ltrb(menu_right, menu_top, window.right() - margin, menu_bottom);
-        let button_margin = ui_button_size / 20.0;
-
-        let grid = GridLayout {
-            left: window.left() + margin,
-            top: window.top() + margin,
-            size: grid_size,
-        };
-
-        let menu_width = menu_right - menu_left;
-        let menu_height = menu_bottom - menu_top;
-        let menu_size = menu_width.min(menu_height / 3.0);
-
-        let menu_center_x = (menu_left + menu_right) / 2.0;
-        let start_y = menu_top + menu_size / 2.0;
-        let menu_shrink = menu_size * MENU_MARGIN;
-
-        Self {
-            grid,
-            button: ButtonLayout {
-                all: button_area,
-                margin: button_margin,
-            },
-            menu: MenuLayout {
-                pause: Rect::square_from_center_side(menu_center_x, start_y, menu_size)
-                    .shrink(menu_shrink),
-
-                settings: Rect::square_from_center_side(
-                    menu_center_x,
-                    start_y + menu_size,
-                    menu_size,
-                )
-                .shrink(menu_shrink),
-
-                hint: Rect::square_from_center_side(
-                    menu_center_x,
-                    start_y + 2.0 * menu_size,
-                    menu_size,
-                )
-                .shrink(menu_shrink),
-            },
-        }
-    }
-
-    pub fn new(window: Rect) -> Self {
-        if window.width() < window.height() {
-            Self::new_portrait(window)
-        } else {
-            Self::new_landscape(window)
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum Button {
-    Number(Number),
-    Undo,
-    Redo,
-    SelectionMode,
-    Delete,
-    Solve,
-    Center,
-    Corner,
-    Color,
-    Generic(u8),
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum Menu {
-    Pause,
-    Settings,
-    Hint,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum Hit {
-    Cell(GridPosition),
-    Button(Button),
-    Menu(Menu),
-    None,
-}
-
-impl Layout {
-    fn hit(&self, x: f32, y: f32) -> Hit {
-        if let Some(pos) = self.grid.hit(x, y) {
-            return Hit::Cell(pos);
-        }
-        if let Some(but) = self.button.hit(x, y) {
-            return Hit::Button(but);
-        }
-        if let Some(men) = self.menu.hit(x, y) {
-            return Hit::Menu(men);
-        }
-        return Hit::None;
-    }
-
-    pub fn get_grid_rect(&self) -> Rect {
-        Rect::from_xywh(
-            self.grid.left,
-            self.grid.top,
-            self.grid.size,
-            self.grid.size,
-        )
-    }
-
-    pub fn get_button_rects(&self) -> Vec<(Rect, Button)> {
-        self.button.get_button_rects()
+    fn lost_focus(&mut self) {
+        self.enter_pause()
     }
 }

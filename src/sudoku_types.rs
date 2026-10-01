@@ -8,6 +8,7 @@ use std::{
 };
 
 use log::info;
+use serde_big_array::BigArray;
 use tiny_skia::{LineCap, LineJoin, PathBuilder, Stroke};
 
 use crate::canvas::Rect;
@@ -15,7 +16,7 @@ use crate::canvas::{Canvas, Swatch};
 
 mod iter;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GridPosition(pub u8);
 
 impl GridPosition {
@@ -56,7 +57,7 @@ impl From<GridPosition> for PositionBucket {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
 pub struct PositionBucket(u128);
 
 impl PositionBucket {
@@ -172,7 +173,7 @@ impl Not for PositionBucket {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Number(pub(super) NonZeroU8);
 
 impl Number {
@@ -214,7 +215,7 @@ impl Number {
     pub const N9: Self = Self(unsafe { NonZeroU8::new_unchecked(9) });
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct NumberBucket(u16);
 
 impl From<Number> for NumberBucket {
@@ -311,8 +312,12 @@ impl Not for NumberBucket {
     }
 }
 
-#[derive(Clone)]
-pub struct NineGrid<T>([T; 9 * 9]);
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(bound(
+    serialize = "T: serde::Serialize",
+    deserialize = "T: for<'a> serde::Deserialize<'a>"
+))]
+pub struct NineGrid<T>(#[serde(with = "BigArray")] [T; 9 * 9]);
 
 impl<T: Copy> NineGrid<T> {
     pub fn filled(val: T) -> Self {
@@ -404,7 +409,7 @@ impl FromStr for NineGrid<Number> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Sudoku {
     // TODO: this could be a Positionbucket Mask on self.solution
     given_numbers: NineGrid<Option<Number>>,
@@ -630,6 +635,7 @@ impl<'a> DiffRef<'a> {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct DiffStack {
     stack: Vec<u8>,
     pointer: usize,
@@ -750,7 +756,7 @@ impl DiffStack {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct GridLayout {
     pub left: f32,
     pub top: f32,

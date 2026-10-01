@@ -18,11 +18,16 @@ tiny-skia = { version = "0.12.0", default-features = false, features = [
 ttf-parser = "0.25.1"
 jni = "0.22.4"
 enum-map = "3.1.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde-big-array = "0.5.1"
+serde_json = "1.0.151"
 
 [package.metadata.android]
 package = "com.example.myrustandroidapp"
 assets = "assets"
 resources = "res"
+apk_name = "Kudosu"
+strip = "default"
 
 [package.metadata.android.application]
 label = "Kudosu"

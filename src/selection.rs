@@ -10,6 +10,7 @@ use crate::{
     Component, DrawState, Navigation, Rect, Sudoku, canvas::Canvas, sudoku_types::GridLayout,
 };
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct SelectionScreen {
     sudoku_index: usize,
     sudoku_cache: Sudoku,
@@ -89,6 +90,7 @@ impl Component for SelectionScreen {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Layout {
     grid: GridLayout,
     left_button: Rect,

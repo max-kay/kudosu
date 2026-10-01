@@ -4,7 +4,6 @@ use std::{
 };
 
 use enum_map::{Enum, EnumMap, enum_map};
-use log::info;
 use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, PixmapMut, Stroke, Transform};
 use ttf_parser::{Face, OutlineBuilder};
 
@@ -75,7 +74,7 @@ impl Default for Palette {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rect {
     left: f32,
     top: f32,
@@ -224,6 +223,7 @@ impl OutlineBuilder for SkiaOutlineBuilder {
 pub struct FaceBook<'a> {
     faces: Vec<(String, Face<'a>)>,
     number_paths: [CharPath; 9],
+    // TODO: does this have to be a Mutex?
     char_paths: Mutex<HashMap<char, CharPath>>,
 }
 
